@@ -1,0 +1,18 @@
+# ===================== Keil 编译产物（编译时会重新生成）=====================
+project/mdk/Objects/
+project/mdk/Listings/
+project/iar/program/Objects/
+project/iar/program/Listings/
+project/iar/program/settings/
+
+# ===================== Keil 界面布局（跟电脑走）=====================
+*.uvguix.*
+
+# ===================== 备份 / 临时文件 =====================
+*.bak
+*.bak-*
+*.build_log.htm
+JLinkLog.txt
+
+# 清理时移走的旧文件（只是本地备份，不算源码）
+_已移除_旧文件备份/
