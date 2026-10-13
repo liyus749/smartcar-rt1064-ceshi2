@@ -18,9 +18,16 @@
 * ================================ 4 个模式 ================================
 *   1 = 跑车（★ 平时就用这个）
 *         图像巡线 + 舵机 PD + 电机 + 环岛
-*         · 电机开关 = 助手【参数调试】第 5 个滑动条（0=停，1=跑）
-*         · 第 6 个滑动条 = 视图（0=图传，1=示波器）
-*         · 另外 4 条 = 速度 / P / D / 阈值
+*         · 图像：直接看【屏幕】（本地显示，流畅，不占无线带宽）
+*         · 波形：无线串口 -> VOFA+，8 个通道
+*         · 调参：VOFA+ 滑动条绑定命令，发下来就能改
+*              P1=%f!  -> 舵机 P
+*              D1=%f!  -> 舵机 D
+*              T1=%f!  -> 阈值偏置（可负）
+*              V1=%f!  -> 电机速度
+*              S1=%f!  -> 电机开关（0=停，1=跑）
+*         · 8 个波形通道：Err / 舵机打角 / 左轮速 / 右轮速 /
+*                          速度设定 / 视野 / 左丢线 / 右丢线
 *
 *   2 = 电机单项测试
 *         不依赖图像 / 参数 / 网络，用来判断"电机 + 编码器"这条链路通不通
@@ -68,7 +75,7 @@
 //  1=WiFi图传   2=舵机+调参   3=电机单项   4=陀螺仪+编码器   5=推车看巡线
 //  6=测WiFi模块 7=低速跑车    8=舵机静态   9=参数回显
 //===================================================================================================================
-#define TEST_MODE               (4)
+#define TEST_MODE               (1)
 
 
 //-------------------------------------------------------------------------------------------------------------------
@@ -371,6 +378,7 @@ static uint8 net_try_once(void)
 #include "GYRO.h"                       // 陀螺仪（环岛状态机靠它的偏航角 FJ_Angle 判断进出）
 #include "zf_device_imu660ra.h"
 #include "Screen.h"                     // IPS 屏幕显示（图像 + 边线）
+#include "Vofa.h"                       // VOFA+ 通信（无线串口：发波形 + 收参数）
 
 extern volatile int   Left_Line[MT9V03X_H];
 extern volatile int   Right_Line[MT9V03X_H];
@@ -616,6 +624,11 @@ int main(void)
     Screen_Init();
 #endif
 
+    // ---------- VOFA+ 无线串口（发波形 + 收参数）----------
+    //   走无线串口模块（UART8，D16/D17），自动波特率，不用配模块
+    //   上电看 B9 灯：常亮 0.5 秒 = 初始化成功；快闪 10 下 = 失败
+    Vofa_Init();
+
     // ---------- 摄像头 ----------
     camera_init_forever();
 
@@ -702,49 +715,34 @@ int main(void)
 #endif
 
         /* ---------- 在线调参：收电脑发来的参数（逐飞助手【参数调试】页）---------- */
-        if(net_ok)
-        {
-            sa_param_read();
+        /* ---------- 在线调参：收 VOFA+ 滑动条发来的参数 ----------
+           ★ 每圈都要调一次 Vofa_Poll()，不然无线串口的 64 字节缓冲会满、参数会丢 */
+        Vofa_Poll();
 
-            /* 助手【参数调试】页有 6 条滑动条，顺序固定：速度 / P / D / 阈值 / 电机开关 / 视图 */
-            /* 【收到参数就回一段文字】—— 这是验证"滑动条到底有没有传到单片机"的唯一可靠办法：
-               每收到一次参数，就往助手的【串口助手】页打一行，同时 B9 灯闪一下。
-               要是你拖了滑动条、串口助手页却一个字都不打 -> 参数根本没传到单片机。 */
-            {
-                uint8 got = 0;
+        /* VOFA+ 里滑动条绑定的命令格式：【字母】【数字】=【数值】!
+              P1=%f!   -> 舵机 P
+              D1=%f!   -> 舵机 D
+              T1=%f!   -> 阈值偏置（可以是负数）
+              V1=%f!   -> 电机速度
+              S1=%f!   -> 电机开关（0 = 停，1 = 跑）
+           ★ 每收到一次参数 B9 灯闪一下 —— 这是"参数到底有没有传进来"的直接证据 */
+        if(Vofa_ParamFlag['P'-'A'][1]) { Vofa_ParamFlag['P'-'A'][1] = 0; run_p      = Vofa_Param['P'-'A'][1]; gpio_toggle_level(B9); }
+        if(Vofa_ParamFlag['D'-'A'][1]) { Vofa_ParamFlag['D'-'A'][1] = 0; run_d      = Vofa_Param['D'-'A'][1]; gpio_toggle_level(B9); }
+        if(Vofa_ParamFlag['T'-'A'][1]) { Vofa_ParamFlag['T'-'A'][1] = 0; run_bias   = Vofa_Param['T'-'A'][1]; gpio_toggle_level(B9); }
+        if(Vofa_ParamFlag['V'-'A'][1]) { Vofa_ParamFlag['V'-'A'][1] = 0; run_duty   = Vofa_Param['V'-'A'][1]; gpio_toggle_level(B9); }
+        if(Vofa_ParamFlag['S'-'A'][1]) { Vofa_ParamFlag['S'-'A'][1] = 0; run_switch = Vofa_Param['S'-'A'][1]; gpio_toggle_level(B9); }
 
-                if(seekfree_assistant_parameter_update_flag[0]) { seekfree_assistant_parameter_update_flag[0] = 0; run_duty = seekfree_assistant_parameter[0]; got = 1; } // 速度
-                if(seekfree_assistant_parameter_update_flag[1]) { seekfree_assistant_parameter_update_flag[1] = 0; run_p    = seekfree_assistant_parameter[1]; got = 1; } // P
-                if(seekfree_assistant_parameter_update_flag[2]) { seekfree_assistant_parameter_update_flag[2] = 0; run_d    = seekfree_assistant_parameter[2]; got = 1; } // D
-                if(seekfree_assistant_parameter_update_flag[3]) { seekfree_assistant_parameter_update_flag[3] = 0; run_bias = seekfree_assistant_parameter[3]; got = 1; } // 阈值：直接就是偏置，可以是负数
-                if(seekfree_assistant_parameter_update_flag[4]) { seekfree_assistant_parameter_update_flag[4] = 0; run_switch = seekfree_assistant_parameter[4]; got = 1; } // 电机开关
-                if(seekfree_assistant_parameter_update_flag[5]) { seekfree_assistant_parameter_update_flag[5] = 0; run_view = seekfree_assistant_parameter[5]; got = 1; }   // 视图：0=图传 1=示波器
-
-                if(got)
-                {
-                    char pbuf[96];
-                    sprintf(pbuf, "[param] 速度=%d P=%d D=%d 阈值=%d 开关=%d 视图=%d\r\n",
-                            (int)run_duty, (int)run_p, (int)run_d,
-                            (int)run_bias, (int)run_switch, (int)run_view);
-                    log_msg(pbuf);                          // 到助手的【串口助手】页
-                    gpio_toggle_level(B9);                  // B9 闪一下 = 收到参数了
-                }
-            }
-
-            /* 安全限幅：防止滑动条拖过头把车弄失控 */
-            if(run_duty <    0.0f) { run_duty =    0.0f; }
-            if(run_duty > 4000.0f) { run_duty = 4000.0f; }
-            if(run_p    <    0.0f) { run_p    =    0.0f; }
-            if(run_p    >   20.0f) { run_p    =   20.0f; }
-            if(run_d    <    0.0f) { run_d    =    0.0f; }
-            if(run_d    >   50.0f) { run_d    =   50.0f; }
-            if(run_bias <  -50.0f) { run_bias =  -50.0f; }
-            if(run_bias >   50.0f) { run_bias =   50.0f; }
-            if(run_switch <  0.5f) { run_switch = 0.0f; }
-            if(run_switch >= 0.5f) { run_switch = 1.0f; }
-            if(run_view   <  0.5f) { run_view   = 0.0f; }
-            if(run_view   >= 0.5f) { run_view   = 1.0f; }
-        }
+        /* 安全限幅：防止滑动条拖过头把车弄失控 */
+        if(run_duty <    0.0f) { run_duty =    0.0f; }
+        if(run_duty > 4000.0f) { run_duty = 4000.0f; }
+        if(run_p    <    0.0f) { run_p    =    0.0f; }
+        if(run_p    >   20.0f) { run_p    =   20.0f; }
+        if(run_d    <    0.0f) { run_d    =    0.0f; }
+        if(run_d    >   50.0f) { run_d    =   50.0f; }
+        if(run_bias <  -50.0f) { run_bias =  -50.0f; }
+        if(run_bias >   50.0f) { run_bias =   50.0f; }
+        if(run_switch <  0.5f) { run_switch = 0.0f; }
+        if(run_switch >= 0.5f) { run_switch = 1.0f; }
 
         /* ---------- 第 5 个滑动条（电机开关）：从"停"拨到"跑"的瞬间，清一下微分项（避免第一拍猛打）---------- */
         if((run_enable > 0.0f) && (run_switch > 0.5f) && (0 == run_was_on))
@@ -810,43 +808,20 @@ int main(void)
             memcpy(image_copy, mt9v03x_image, MT9V03X_IMAGE_SIZE);
 #endif
 
-            /* 6. 只有网络通了才发（没连上时调用发送会卡住）*/
-            if(net_ok)
+            /* 6. 发一包波形给 VOFA+（8 通道）
+                  ★ 在 VOFA+ 里把这 8 条都勾上，重点是前两条：
+                     Err 和 舵机实际打角 —— 调 PD 就看这两条 */
             {
-                /* 视图由"第 6 条滑动条"在线切换：0 = 图传，1 = 示波器
-                   （助手里的页面记得跟着切：图传 <-> 虚拟示波器） */
-                if(run_view < 0.5f)
-                {
-                    /* ---- 图传：边线每帧发，图像分频发 ---- */
-                    sa_send_boundary();
-
-                    img_div++;
-                    if(img_div >= IMG_EVERY_N)
-                    {
-                        img_div = 0;
-                        sa_send_image();
-                    }
-                }
-                else
-                {
-                    /* ---- 示波器：调环岛专用（6 条线）----
-                       第1条 = Island_State      环岛状态：0 没进环；1~5 环里走到第几步；出环回 0
-                       第2条 = Left_Lost_Time    左边界丢线行数（左环岛入环判据：要 10~88）
-                       第3条 = Right_Lost_Time   右边界丢线行数（右环岛入环判据：要 10~88）
-                       第4条 = Search_Stop_Line  视野长度（最长白列）——【右环岛】要求 >= 99，最可能卡你
-                       第5条 = FJ_Angle          陀螺仪偏航角（环内靠它推进状态，不动就是陀螺仪没工作）
-                       第6条 = Err               图像偏差（看补线之后偏差合不合理） */
-                    {
-                        float osc[6];
-                        osc[0] = (float)Island_State;
-                        osc[1] = (float)Left_Lost_Time;
-                        osc[2] = (float)Right_Lost_Time;
-                        osc[3] = (float)Search_Stop_Line;
-                        osc[4] = FJ_Angle;
-                        osc[5] = Err;
-                        sa_osc_send(osc, 6);
-                    }
-                }
+                float osc[8];
+                osc[0] = Err;                                   /* 图像偏差（调 PD 主要看这条）*/
+                osc[1] = (float)Servo_GetAngle();               /* 舵机实际打角 */
+                osc[2] = (float)enc_l;                          /* 左轮转速 */
+                osc[3] = (float)enc_r;                          /* 右轮转速 */
+                osc[4] = run_duty;                              /* 速度设定值 */
+                osc[5] = (float)Search_Stop_Line;               /* 视野长度（图像健康）*/
+                osc[6] = (float)Left_Lost_Time;                 /* 左丢线行数 */
+                osc[7] = (float)Right_Lost_Time;                /* 右丢线行数 */
+                Vofa_SendWaves(osc, 8);
             }
         }
     }

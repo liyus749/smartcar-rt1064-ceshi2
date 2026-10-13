@@ -28,6 +28,7 @@ static uint8 vofa_len = 0;
 void Vofa_Init(void)
 {
     uint8 i, j;
+    uint8 init_ret;
 
     for(i = 0; i < 26; i++)
     {
@@ -39,9 +40,28 @@ void Vofa_Init(void)
     }
     vofa_len = 0;
 
-    wireless_uart_init();                       /* 初始化无线串口（UART8，D16/D17）*/
+    /* 初始化无线串口（UART8，D16/D17）
+       现在是【自动波特率】模式：模块自己识别单片机用的是多少波特率，不用重新配模块 */
+    init_ret = wireless_uart_init();
 
-    wireless_uart_send_string("\r\n[VOFA] ready, UART8 115200\r\n");
+    /* 初始化失败 = 自动波特率没匹配上
+       （模块没插好 / RTS 没接 / 固件版本不支持）
+       ★ 这时候串口是发不出去的，所以只能用 B9 灯报警 */
+    if(0 != init_ret)
+    {
+        for(i = 0; i < 10; i++)                 /* B9 快闪 10 下 = 无线串口初始化失败 */
+        {
+            gpio_set_level(B9, GPIO_LOW);   system_delay_ms(80);
+            gpio_set_level(B9, GPIO_HIGH);  system_delay_ms(80);
+        }
+        return;
+    }
+
+    gpio_set_level(B9, GPIO_LOW);               /* B9 常亮 0.5 秒 = 无线串口初始化成功 */
+    system_delay_ms(500);
+    gpio_set_level(B9, GPIO_HIGH);
+
+    wireless_uart_send_string("\r\n[VOFA] ready, UART8 auto-baud\r\n");
 }
 
 //-------------------------------------------------------------------------------------------------------------------
@@ -215,7 +235,7 @@ float Vofa_Get(char letter, uint8 digit)
 void Vofa_SelfTest(void)
 {
     float  t = 0.0f;
-    float  w[4];
+    float  w[8];
     uint16 tick = 0;
 
     Vofa_Init();
@@ -225,17 +245,25 @@ void Vofa_SelfTest(void)
         /* ---------- 1. 先收参数（每圈都要收，不然 64 字节缓冲会满）---------- */
         Vofa_Poll();
 
-        /* ---------- 2. 造 4 个通道的数据 ---------- */
+        /* ---------- 2. 造 8 个通道的数据 ----------
+           ★ 前 4 条是"测试波形"，用来确认数据在发
+           ★ 第 5~7 条是你从 VOFA+ 发下来的参数 P1/P2/P3
+              拖滑动条时这三条线会跟着动 = 电脑→单片机 也通了
+           ★ 第 8 条是递增计数，用来确认数据在持续刷新            */
         t += 0.05f;
         if(t > 6.28f) { t = 0.0f; }
 
-        w[0] = sinf(t) * 100.0f;                        /* 通道1：正弦（放大 100 倍好观察）*/
-        w[1] = sinf(t * 2.0f) * 100.0f;                 /* 通道2：二倍频 */
-        w[2] = (float)(tick % 200) - 100.0f;            /* 通道3：锯齿 */
-        w[3] = Vofa_Get('P', 1);                        /* 通道4：★ 收到的参数 P1 */
+        w[0] = sinf(t) * 100.0f;                        /* ch0：正弦（放大 100 倍好观察）*/
+        w[1] = sinf(t * 2.0f) * 100.0f;                 /* ch1：二倍频正弦 */
+        w[2] = (float)(tick % 200) - 100.0f;            /* ch2：锯齿波 */
+        w[3] = (tick % 100) < 50 ? 50.0f : -50.0f;      /* ch3：方波 */
+        w[4] = Vofa_Get('P', 1);                        /* ch4：★ 参数 P1 */
+        w[5] = Vofa_Get('P', 2);                        /* ch5：★ 参数 P2 */
+        w[6] = Vofa_Get('P', 3);                        /* ch6：★ 参数 P3 */
+        w[7] = (float)(tick % 1000);                    /* ch7：递增计数 */
 
         /* ---------- 3. 发出去 ---------- */
-        Vofa_SendWaves(w, 4);
+        Vofa_SendWaves(w, 8);
 
         /* ---------- 4. B9 灯闪一下，表示程序活着 ---------- */
         if(0 == (tick % 25))
