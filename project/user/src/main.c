@@ -619,6 +619,9 @@ void pit_handler0(void)
     else
     {
         isr_ms = 0;                                     // 停下时清零，下次启动重新计时
+        dbg_duty = 0;                                   // ★ 停的时候也要把"实际输出"清 0，
+                                                        //   不然屏幕上 Out 会留着上一次的数字，
+                                                        //   看起来像"关了开关电机还在出力"
         Motor_Stop();
         Servo_Steer(0);
     }
