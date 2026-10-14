@@ -827,6 +827,9 @@ int main(void)
             Screen_ShowFrame(mt9v03x_image[0], image_two_value[0],
                              line_left, line_mid, line_right);
             Screen_ShowStatus(Err, Island_State, (int)run_duty);
+            /* 5.7 【屏幕】参数下行的诊断两行：Sw(开关) / Out(真正输出) / rx(收到字节) / ok(收到条数)
+                   ★ 拖 VOFA 滑动条时看这两行，一眼就能判断参数到底进没进单片机 */
+            Screen_ShowParam((int)run_switch, dbg_duty, Vofa_RxBytes, Vofa_CmdOk);
 #endif
 
 #if !SEND_LINES_ONLY
