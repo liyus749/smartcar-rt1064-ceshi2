@@ -19,7 +19,7 @@
 *   1 = 跑车（★ 平时就用这个）
 *         图像巡线 + 舵机 PD + 电机 + 环岛
 *         · 图像：直接看【屏幕】（本地显示，流畅，不占无线带宽）
-*         · 波形：无线串口 -> VOFA+，12 个通道【从下往上数，第 1 条在最下面】
+*         · 波形：无线串口 -> VOFA+，13 个通道【从下往上数，第 1 条在最下面】
 *              1 = Err            图像偏差（调 PD 主要看这条）
 *              2 = 舵机实际打角   Servo_GetAngle()
 *              3 = 左轮转速       编码器
@@ -37,6 +37,12 @@
 *             12 = 成功收到的参数条数  只涨不跌
 *                  ★ 11 在涨、12 不动 = 电脑发了，但命令内容单片机认不出来
 *                  ★ 12 在涨 = 参数真的进来了，V1 / S1 一定生效
+*             13 = 心跳（锯齿 0~999，每帧 +1，约 20 秒走一圈）
+*                  ★ 它在爬 = 单片机在发数据；它不爬 = 单片机没发（或上位机暂停了）
+*         · ★★ 和屏幕对不上怎么办 ★★
+*             屏幕上的 Err 是"此刻"的值，VOFA 的曲线是"历史"。要比就比【最右边最新的那个点】。
+*             JustFloat 协议没有时间戳，所以 VOFA 的横轴是"第几个采样点"，不是秒。
+*             两边数值一样、只是小数位不同（屏幕 1 位小数，VOFA 位数更多）是正常的。
 *         · 调参：VOFA+ 滑动条绑定命令，发下来就能改
 *              P1=%f!  -> 舵机 P
 *              D1=%f!  -> 舵机 D
@@ -520,6 +526,7 @@ static volatile int16 enc_l      = 0;                       // 左轮编码器�
 static volatile int16 enc_r      = 0;                       // 右轮编码器
 static uint16         img_div    = 0;                       // 图传分频计数（每 IMG_EVERY_N 帧发一幅图）
 static volatile int   dbg_duty   = 0;                       // ★调试用：中断里实际输出的占空比
+static volatile uint16 wave_cnt  = 0;                       // ★心跳计数：每发一包波形 +1（锯齿 0~999）
 
 static uint8 line_left[MT9V03X_H];      // 要发给助手的左边界（X 坐标）
 static uint8 line_mid[MT9V03X_H];       // 中线
@@ -805,6 +812,12 @@ int main(void)
                 Err = Err_Sum();
             }
 
+            /* 4.5 ★保护★ Err 万一是 NaN（学长那个加权平均在"图像里一条线都看不到"时会算 0/0），
+                   立刻退回上一拍的值。
+                   不处理的话：NaN 会一路传进舵机 PD（舵机乱甩）和波形（上位机显示乱码、
+                   甚至因为 NaN/无穷大的字节和 JustFloat 帧尾撞车，导致整包数据错位）。 */
+            if(Err != Err) { Err = err_last; }
+
             /* 5. 把边界整理成要发送的三个数组（助手会给它们画出来）*/
             for(i = 0; i < MT9V03X_H; i++)
             {
@@ -836,10 +849,11 @@ int main(void)
             memcpy(image_copy, mt9v03x_image, MT9V03X_IMAGE_SIZE);
 #endif
 
-            /* 6. 发一包波形给 VOFA+（12 通道）
-                  ★ 前 8 条是"车况"，第 9~12 条是"参数下行到底通没通"的证据 */
+            /* 6. 发一包波形给 VOFA+（13 通道）
+                  ★ 1~8 条是"车况"，9~12 条是"参数下行通没通"的证据，
+                    第 13 条是"心跳"，用来看"数据到底是不是活的、上位机是不是冻结了" */
             {
-                float osc[12];
+                float osc[13];
                 osc[0] = Err;                                   /* 图像偏差（调 PD 主要看这条）*/
                 osc[1] = (float)Servo_GetAngle();               /* 舵机实际打角 */
                 osc[2] = (float)enc_l;                          /* 左轮转速 */
@@ -852,7 +866,9 @@ int main(void)
                 osc[9] = (float)dbg_duty;                       /* ★中断里实际输出的占空比 */
                 osc[10] = (float)Vofa_RxBytes;                  /* ★电脑发过来的字节数（只涨不跌）*/
                 osc[11] = (float)Vofa_CmdOk;                    /* ★成功收到的参数条数（只涨不跌）*/
-                Vofa_SendWaves(osc, 12);
+                osc[12] = (float)(wave_cnt % 1000);             /* ★心跳：一直往上爬 = 数据在动 */
+                Vofa_SendWaves(osc, 13);
+                wave_cnt++;
             }
         }
     }

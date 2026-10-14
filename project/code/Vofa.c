@@ -78,6 +78,9 @@ void Vofa_Init(void)
 //-------------------------------------------------------------------------------------------------------------------
 void Vofa_SendWaves(const float *vals, uint8 n)
 {
+    float tmp[VOFA_MAX_CH];
+    uint8 i;
+
     if((NULL == vals) || (0 == n))
     {
         return;
@@ -87,7 +90,27 @@ void Vofa_SendWaves(const float *vals, uint8 n)
         n = VOFA_MAX_CH;
     }
 
-    wireless_uart_send_buffer((const uint8 *)vals, (uint32)n * sizeof(float));
+    /* ---------- ★★ 先"消毒"：NaN / 无穷大 绝对不能进数据流 ★★ ----------
+       为什么必须处理：
+         JustFloat 的帧尾 4 个字节是  00 00 80 7F，
+         而【正无穷大】这个 float 在内存里的 4 个字节【正好也是 00 00 80 7F】。
+         所以只要有一个通道算出正无穷大（最典型的就是除以 0），上位机就会以为
+         "这一包到这儿就结束了"，把后面的数据全当成下一包 —— 结果是：
+            · 通道整体错位（VOFA 上的第 1 条其实不是 Err）
+            · 曲线看起来乱跳 / 像卡住不动
+            · 数值和屏幕上对不上
+         NaN 也一样会让上位机显示成乱码。
+       这里统一替换成 0，波形就永远是干净的。（判断方法：自己不等于自己就是 NaN） */
+    for(i = 0; i < n; i++)
+    {
+        tmp[i] = vals[i];
+        if((tmp[i] != tmp[i]) || (tmp[i] > 1.0e30f) || (tmp[i] < -1.0e30f))
+        {
+            tmp[i] = 0.0f;
+        }
+    }
+
+    wireless_uart_send_buffer((const uint8 *)tmp, (uint32)n * sizeof(float));
     wireless_uart_send_buffer(vofa_tail, 4);
 }
 

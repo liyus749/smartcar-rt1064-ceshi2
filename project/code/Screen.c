@@ -110,8 +110,12 @@ void Screen_ShowFrame(const uint8 *gray, const uint8 *bin,
 //-------------------------------------------------------------------------------------------------------------------
 void Screen_ShowStatus(float err, int state, int duty)
 {
+    /* ★ Err 的整数位数给 3 位（原来是 2 位）。
+       逐飞这个 show_float 的实现是"整数部分按 num 位取模"，
+       也就是说 num=2 时，Err = -123.4 会被显示成 -23.4（少了个百位），
+       和 VOFA 上看到的 -123.4 就会"对不上"。给 3 位就不会再截断。 */
     ips200_show_string(0,  SCR_TXT_Y,       "Err ");
-    ips200_show_float (40, SCR_TXT_Y,       err, 2, 1);
+    ips200_show_float (40, SCR_TXT_Y,       err, 3, 1);
 
     ips200_show_string(0,  SCR_TXT_Y + 16,  "Isl ");
     ips200_show_int   (40, SCR_TXT_Y + 16,  state, 2);
