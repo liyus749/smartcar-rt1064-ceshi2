@@ -17,6 +17,9 @@
 volatile float  Vofa_Param[26][10];
 volatile uint8  Vofa_ParamFlag[26][10];
 
+volatile uint32 Vofa_RxBytes = 0;                                   /* 从电脑收到的总字节数（只涨不跌）*/
+volatile uint32 Vofa_CmdOk   = 0;                                   /* 成功解析出的参数条数（只涨不跌）*/
+
 static const uint8 vofa_tail[4] = { 0x00, 0x00, 0x80, 0x7f };       /* JustFloat 帧尾 */
 
 static char  vofa_line[48];                                         /* 收命令用的行缓冲 */
@@ -39,6 +42,8 @@ void Vofa_Init(void)
         }
     }
     vofa_len = 0;
+    Vofa_RxBytes = 0;
+    Vofa_CmdOk   = 0;
 
     /* 初始化无线串口（UART8，D16/D17）
        现在是【自动波特率】模式：模块自己识别单片机用的是多少波特率，不用重新配模块 */
@@ -87,19 +92,22 @@ void Vofa_SendWaves(const float *vals, uint8 n)
 }
 
 //-------------------------------------------------------------------------------------------------------------------
-// 函数简介     解析一条命令，格式：【字母】【数字】=【数值】!
+// 函数简介     解析一条命令，格式：【字母】【数字】=【数值】
 // 举例         "P1=2.5!"   ->  Vofa_Param['P'-'A'][1] = 2.5
+//              "P1=2.5"    ->  一样能认（结尾不一定要 '!'）
 //              "M=1!"      ->  Vofa_Param['M'-'A'][0] = 1.0   （不带数字相当于 0）
 //              "D1=-5.5!"  ->  支持负数
 // 备注信息     手写解析，不用 sscanf（省浮点扫描库的开销），小数用累乘法（不用 powf）
+//              【容错】字母不要求在第一个字节，结尾不要求是 '!'，
+//                      数值前面有空格也行，后面有杂字符（换行/回车）也不影响
 //-------------------------------------------------------------------------------------------------------------------
 static void vofa_parse_line(const char *s, uint8 len)
 {
     uint8 i;
-    uint8 eq = 0xFF;                            /* '=' 的位置 */
-    uint8 ex = 0xFF;                            /* '!' 的位置 */
-    uint8 letter;
-    uint8 digit = 0;
+    uint8 eq = 0xFF;                            /* 最后一个 '=' 的位置 */
+    uint8 letter = 0;                           /* 命令的字母 */
+    uint8 digit  = 0;                           /* 命令后面跟的数字（第几组）*/
+    uint8 got_digit = 0;
     uint8 neg = 0;
     uint8 dot = 0;
     uint8 seen = 0;
@@ -107,45 +115,58 @@ static void vofa_parse_line(const char *s, uint8 len)
     float frac = 0.1f;
     char  c;
 
-    /* ---------- 1. 找定界符 '=' 和 '!' ---------- */
+    if(0 == len) { return; }
+
+    /* ---------- 1. 找【最后一个】'=' ----------
+       为什么找最后一个：电脑发下来的东西前面可能带换行之类的杂字符，
+       找第一个万一杂字符里有 '=' 就会解析错。 */
     for(i = 0; i < len; i++)
     {
-        if(('=' == s[i]) && (0xFF == eq)) { eq = i; }
-        if('!' == s[i])                   { ex = i; break; }
+        if('=' == s[i]) { eq = i; }
     }
-    if((0xFF == eq) || (0xFF == ex))      { return; }   /* 缺定界符，丢弃 */
-    if(ex <= (eq + 1))                    { return; }   /* 等号和感叹号之间没数值 */
-    if(0 == eq)                           { return; }   /* 等号前面没名字 */
+    if(0xFF == eq) { return; }                  /* 没有 '='：这不是参数命令，丢弃 */
 
-    /* ---------- 2. 解析名字：等号前面的字母（可选跟一个数字）---------- */
-    letter = (uint8)s[0];
-    if((letter >= 'a') && (letter <= 'z')) { letter -= 32; }    /* 小写转大写 */
-    if((letter < 'A') || (letter > 'Z'))   { return; }
-
-    if(eq >= 2)                                                  /* 有第二个字符 */
+    /* ---------- 2. 名字：等号前面【最近的那个字母】+ 可选的一个数字 ----------
+       ★ 不再要求字母在第 1 个字节 —— 前面多几个换行/空格也认 */
+    for(i = eq; i > 0; i--)
     {
-        if((s[1] >= '0') && (s[1] <= '9'))
+        c = s[i - 1];
+
+        if((c >= 'a') && (c <= 'z')) { c = (char)(c - 32); }     /* 小写转大写 */
+
+        if((c >= 'A') && (c <= 'Z'))
         {
-            digit = (uint8)(s[1] - '0');
+            letter = (uint8)c;
+            break;
+        }
+        if(((c >= '0') && (c <= '9')) && (0 == got_digit))
+        {
+            digit     = (uint8)(c - '0');
+            got_digit = 1;
         }
     }
+    if(0 == letter) { return; }                 /* 等号前面没有字母，丢弃 */
 
-    /* ---------- 3. 解析数值：等号和感叹号之间 ---------- */
+    /* ---------- 3. 数值：等号后面，能读多少读多少 ----------
+       ★ 不再要求必须以 '!' 结尾；读到不认识的字（换行 / '!' / 乱码）就停下，
+         前面那几个数字照样算数 —— 这样"格式差点"的命令也能用 */
     i = (uint8)(eq + 1);
-    if(('-' == s[i]) || ('+' == s[i]))
+    while((i < len) && ((' ' == s[i]) || ('\t' == s[i]))) { i++; }      /* 跳过空格 */
+
+    if((i < len) && (('-' == s[i]) || ('+' == s[i])))
     {
         neg = ('-' == s[i]) ? 1 : 0;
         i++;
     }
 
-    for(; i < ex; i++)
+    for(; i < len; i++)
     {
         c = s[i];
 
         if((c >= '0') && (c <= '9'))
         {
             if(0 == dot) { v = v * 10.0f + (float)(c - '0'); }
-            else         { v = v + (float)(c - '0') * frac;  frac *= 0.1f; }
+            else         { v = v + (float)(c - '0') * frac; frac *= 0.1f; }
             seen = 1;
         }
         else if('.' == c)
@@ -154,20 +175,24 @@ static void vofa_parse_line(const char *s, uint8 len)
         }
         else
         {
-            return;                                             /* 中间有非法字符，整条丢弃 */
+            break;                                              /* 数值到这儿结束 */
         }
     }
 
-    if(0 == seen) { return; }                                   /* 一个数字都没有 */
+    if(0 == seen) { return; }                                   /* 一个数字都没读到 */
     if(neg)       { v = -v; }
 
     Vofa_Param[letter - 'A'][digit]     = v;
     Vofa_ParamFlag[letter - 'A'][digit] = 1;
+    Vofa_CmdOk++;                                               /* ★ 成功收到一条参数 */
 }
 
 //-------------------------------------------------------------------------------------------------------------------
 // 函数简介     收参数（每圈都要调！无线串口接收缓冲只有 64 字节）
-// 备注信息     用 '!' 当一条命令的结束标志，所以不需要换行
+// 备注信息     '!' 和【换行】都当一条命令的结束标志 —— 两种都认
+//              （以前只认 '!'，如果上位机发的是 "V1=1000\r\n" 就整条被丢掉，
+//                这就是"参数传不进来"最可能的原因之一）
+//              收到多少字节记在 Vofa_RxBytes，成功解析出多少条记在 Vofa_CmdOk
 //-------------------------------------------------------------------------------------------------------------------
 void Vofa_Poll(void)
 {
@@ -177,22 +202,23 @@ void Vofa_Poll(void)
     char   c;
 
     n = wireless_uart_read_buffer(buf, sizeof(buf));
+    Vofa_RxBytes += n;                                          /* ★ 累计收到的字节数 */
 
     for(i = 0; i < n; i++)
     {
         c = (char)buf[i];
 
-        if('!' == c)                                            /* 遇到 '!' = 一条命令结束 */
+        if(('!' == c) || ('\n' == c))                           /* '!' 或换行 = 一条命令结束 */
         {
             if(vofa_len > 0)
             {
-                if(vofa_len < (sizeof(vofa_line) - 1))
-                {
-                    vofa_line[vofa_len++] = '!';                /* 把 '!' 也放进去一起解析 */
-                }
                 vofa_parse_line(vofa_line, vofa_len);
                 vofa_len = 0;
             }
+        }
+        else if('\r' == c)
+        {
+            /* 回车丢掉，不占缓冲区 */
         }
         else if(vofa_len < (sizeof(vofa_line) - 2))
         {
