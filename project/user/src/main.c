@@ -19,8 +19,8 @@
 *   1 = 跑车（★ 平时就用这个）
 *         图像巡线 + 舵机 PD + 电机 + 环岛
 *         · 图像：直接看【屏幕】（本地显示，流畅，不占无线带宽）
-*         · 波形：无线串口 -> VOFA+，14 个通道【从下往上数，第 1 条在最下面】
-*              1 = Err            图像偏差【原始值】
+*         · 波形：无线串口 -> VOFA+，15 个通道【从下往上数，第 1 条在最下面】
+*              1 = Err            图像偏差【前瞻加权后的原始值】
 *              2 = 舵机实际打角   Servo_GetAngle()
 *              3 = 左轮转速       编码器
 *              4 = 右轮转速       编码器
@@ -42,6 +42,10 @@
 *             14 = 滤波后的偏差（= 真正送进舵机 PD 的那个值）
 *                  ★ 把第 1 条和第 14 条放一起看：第 14 条比第 1 条平多少，
 *                    就是滤波压掉了多少抖动。F1 调大 -> 第 14 条更平（但转向更迟钝）
+*             15 = 这一帧实际用的"前瞻起始行"
+*                  ★ 正常时它 = 你设的 L1；如果你把 L1 调得很小（想看得更远），
+*                    但画面里根本看不到那么远，它会被自动抬到看得见的最远那一行
+*                    （行号越小 = 看得越远；抬不动说明摄像头看不到那么远）
 *         · ★★ 和屏幕对不上怎么办 ★★
 *             屏幕上的 Err 是"此刻"的值，VOFA 的曲线是"历史"。要比就比【最右边最新的那个点】。
 *             JustFloat 协议没有时间戳，所以 VOFA 的横轴是"第几个采样点"，不是秒。
@@ -51,6 +55,7 @@
 *              D1=%f!  -> 舵机 D
 *              T1=%f!  -> 阈值偏置（可负）
 *              F1=%f!  -> Err 滤波强度（0 = 关；0.3~0.5 好用；越大越平但转向越迟钝）
+*              L1=%f!  -> 前瞻起始行（0~110，默认 38；★ 越小 = 看得越远）
 *              V1=%f!  -> 电机速度
 *              S1=%f!  -> 电机开关（0=停，1=跑）
 *         · 【上电就自动开始跑】，速度默认 1000 —— 车会自己动，手边别离人
@@ -412,6 +417,8 @@ static uint8 net_try_once(void)
 
 extern volatile int   Left_Line[MT9V03X_H];
 extern volatile int   Right_Line[MT9V03X_H];
+extern int            Left_Lost_Flag[MT9V03X_H];    // 1 = 这一行左边没找到边界（丢线）
+extern int            Right_Lost_Flag[MT9V03X_H];   // 1 = 这一行右边没找到边界
 extern uint8          image_two_value[MT9V03X_H][MT9V03X_W];
 extern volatile float Err;
 extern volatile uint8 Img_Disappear_Flag;
@@ -459,6 +466,33 @@ extern volatile int   Search_Stop_Line;     // 视野长度（最长白列）—
 //-------------------------------------------------------------------------------------------------------------------
 #define ERR_FILTER          (0.35f)     // F1 的默认值（上电值）
 #define TH_SMOOTH_K         (0.35f)     // 阈值平滑强度（固定）
+
+//===================================================================================================================
+// 【前瞻】—— 决定"看多远"的那个参数，以及加权的权重表
+//
+//   ★ 图像的行号约定（很重要，别记反）：第 0 行 = 最远（画面上方），第 119 行 = 最近（画面下方，车头前）
+//     所以"前瞻起始行"这个数【越小 = 看得越远】。
+//
+//   我们怎么算偏差（和学长 Err_Sum 的区别）：
+//     学长 Err_Sum：从第 119 行往上扫到第 (Search_Stop_Line-1) 行。
+//                   直道上 Search_Stop_Line 有 70 多，算出来只覆盖了 73~99 行 ——
+//                   正好是【车头正前方那一小段】，而权重表里 3~15 的"前瞻区"（约 38~59 行）被整个跳过。
+//     我们的做法：固定从 PROSPECT_ROW 行开始，往下取 21 行，按下面这张表【加权】求平均。
+//                 这就是算法文档里写的那套"加权前瞻"。
+//
+//   权重表（21 个值，对应窗口里的第 0~20 行；第 0 行最远）：
+//     中间那几个大权重（26/27/31/30）就是"最看重的地方"，两端权重小 ——
+//     这样远处那一点点抖动不会主导偏差，同时又能"提前看到弯"。
+//===================================================================================================================
+#define PROSPECT_ROW        (38)        // L1 的默认值：前瞻起始行（越小看得越远；38 是算法文档里的常用值）
+#define PROSPECT_WIN        (21)        // 前瞻窗口高度（行数），和算法文档一致，不用改
+
+static const uint8 Prospect_Weight[PROSPECT_WIN] =
+{
+    10, 10, 11, 26, 27, 31, 30, 25, 25, 10,
+     7,  6,  6,  6,  5,  4,  4,  4,  3,  3,
+    12
+};
 
 #define SEND_LINES_ONLY     (0)         // 0 = 发摄像头原图 + 边线【现在用这个】  1 = 只发边线（省带宽，但看不到图）
 
@@ -525,6 +559,10 @@ extern volatile int   Search_Stop_Line;     // 视野长度（最长白列）—
 //   命令 F1=%f!  ->  Err 滤波   量程 0 ~ 0.9  默认 0.35
 //                    0 = 不滤波（提速后用）；0.3~0.5 = 低速调车好用
 //                    ★ 这是专门压"车停着 Err 还在 0 和 ±1 之间跳"的
+//   命令 L1=%f!  ->  前瞻起始行  量程 0 ~ 110  默认 38
+//                    ★ 越小 = 看得越远（第 0 行是最远，第 119 行是最近）
+//                      直道可以看得远一点（30~35），弯道太远会找不到线，
+//                      实际用的行会自动限制在"看得见的范围内"（波形第 15 条能看到）
 //
 //   ★ 命令格式：字母 + 数字 + "=" + 数值 + "!"
 //         所以滑动条绑定的内容要写成一整条，例如  V1=%f!    （%f 是 VOFA 自己替换成数值）
@@ -542,6 +580,8 @@ static volatile float run_p      = RUN_P;                   // P1：舵机 P
 static volatile float run_d      = RUN_D;                   // D1：舵机 D
 static volatile float run_bias   = (float)RUN_OSTU_BIAS;    // T1：阈值偏置（可负）
 static volatile float run_errfilt = (float)ERR_FILTER;      // F1：Err 低通滤波强度（0 = 关）
+static volatile float run_prospect = (float)PROSPECT_ROW;   // L1：前瞻起始行（越小看得越远）
+static volatile int   dbg_prospect = PROSPECT_ROW;          // 这一帧实际用的前瞻起始行（发到波形第 15 条）
 static volatile float run_ramp   = (float)RAMP_MS;          // 起步软启动（固定值，不在电脑上调）
 static volatile float run_switch = (float)RUN_AUTO_START;   // S1：电机开关（上电默认 1 = 跑）
 static volatile float run_view   = (float)RUN_VIEW_MODE;    // 旧方案的"视图"开关（现在没用，留着不影响）
@@ -576,6 +616,70 @@ static float           err_filt_val  = 0.0f;    // 滤波后的偏差（内部�
 static volatile float  err_use       = 0.0f;    // ★ 真正送给舵机 PD 的偏差（= 滤波后的 Err）
 static uint8           err_filt_init = 0;       // 第一次拿到有效 Err 时直接赋值，避免起步时慢慢爬
 
+//-------------------------------------------------------------------------------------------------------------------
+// 函数简介     前瞻加权偏差（★ 这就是"加前瞻"的核心）
+// 参数说明     err_out 结果放在这里（单位：像素，正 = 中线偏左、需要往左打；和原来符号一致）
+// 返回参数     uint8   1 = 这一帧算出来了；0 = 一行有效数据都没有（调用方保持上一帧的偏差）
+//
+// 做法（和算法文档里的"加权前瞻"一致）：
+//   1. 从 run_prospect 行开始，往下取 21 行（0 行 = 最远，119 行 = 最近）
+//   2. 这个窗口会被【自动限制在看得见的范围内】：
+//      Search_Stop_Line 表示从图像底部往上能看到多少行，
+//      所以"能看到的最远那一行" = MT9V03X_H - Search_Stop_Line。
+//      你把 L1 调得再小，也不会去看一条本来就看不见的路。
+//   3. 每一行算 (画面中心 94 - 这一行的中线)，再乘权重加起来，最后除以权重和
+//   4. ★ 丢线的行直接跳过（不算）：
+//      丢线那一行的边界会被顶到屏幕边缘（左边留在 2、右边留在 185），
+//      于是"中线"跑到画面中间去，会算出一个假偏差（单边丢线甚至能有 ±20）。
+//      跳过它，偏差就不会被这种行带偏。
+//-------------------------------------------------------------------------------------------------------------------
+static uint8 Err_Prospect(float *err_out)
+{
+    int   start;
+    int   farthest;
+    int   i;
+    float sum  = 0.0f;
+    float wsum = 0.0f;
+    float w;
+
+    /* ---------- 1. 决定前瞻起始行 ---------- */
+    start = (int)run_prospect;
+
+    if(start < 0)                    { start = 0; }
+    if(start > MT9V03X_H - 2)        { start = MT9V03X_H - 2; }
+
+    farthest = MT9V03X_H - Search_Stop_Line;            /* 看得见的最远那一行（行号越小越远） */
+    if(farthest < 0)  { farthest = 0; }
+    if(farthest > MT9V03X_H - 2)     { farthest = MT9V03X_H - 2; }
+    if(start < farthest)             { start = farthest; }  /* 别往"看不见的"行去看 */
+
+    dbg_prospect = start;                               /* 发到波形第 15 条，方便看前瞻取在哪一行 */
+
+    /* ---------- 2. 窗口内加权平均 ---------- */
+    for(i = 0; i < PROSPECT_WIN; i++)
+    {
+        int row = start + i;                            /* 从远到近 */
+
+        if(row > (MT9V03X_H - 1))       { break; }      /* 已经到图像最下面了 */
+
+        if((1 == Left_Lost_Flag[row]) || (1 == Right_Lost_Flag[row]))
+        {
+            continue;                                   /* ★ 这一行有边界丢线：跳过，不用假数据 */
+        }
+
+        w     = (float)Prospect_Weight[i];
+        sum  += (float)((MT9V03X_W / 2) - ((Left_Line[row] + Right_Line[row]) >> 1)) * w;
+        wsum += w;
+    }
+
+    if(wsum < 0.5f)
+    {
+        return 0;                                       /* 一行有效的都没有：这帧不算 */
+    }
+
+    *err_out = sum / wsum;
+    return 1;
+}
 //-------------------------------------------------------------------------------------------------------------------
 // 10ms 中断：累加系统时间
 //-------------------------------------------------------------------------------------------------------------------
@@ -804,6 +908,7 @@ int main(void)
         if(Vofa_ParamFlag['D'-'A'][1]) { Vofa_ParamFlag['D'-'A'][1] = 0; run_d      = Vofa_Param['D'-'A'][1]; gpio_toggle_level(B9); }
         if(Vofa_ParamFlag['T'-'A'][1]) { Vofa_ParamFlag['T'-'A'][1] = 0; run_bias   = Vofa_Param['T'-'A'][1]; gpio_toggle_level(B9); }
         if(Vofa_ParamFlag['F'-'A'][1]) { Vofa_ParamFlag['F'-'A'][1] = 0; run_errfilt = Vofa_Param['F'-'A'][1]; gpio_toggle_level(B9); }
+        if(Vofa_ParamFlag['L'-'A'][1]) { Vofa_ParamFlag['L'-'A'][1] = 0; run_prospect = Vofa_Param['L'-'A'][1]; gpio_toggle_level(B9); }
         if(Vofa_ParamFlag['V'-'A'][1]) { Vofa_ParamFlag['V'-'A'][1] = 0; run_duty   = Vofa_Param['V'-'A'][1]; gpio_toggle_level(B9); }
         if(Vofa_ParamFlag['S'-'A'][1]) { Vofa_ParamFlag['S'-'A'][1] = 0; run_switch = Vofa_Param['S'-'A'][1]; gpio_toggle_level(B9); }
 
@@ -818,6 +923,8 @@ int main(void)
         if(run_bias >   50.0f) { run_bias =   50.0f; }
         if(run_errfilt <  0.0f) { run_errfilt =  0.0f; }        // F1：0 = 关滤波
         if(run_errfilt >  0.9f) { run_errfilt =  0.9f; }        // 太大转向会明显迟钝，限到 0.9
+        if(run_prospect <   0.0f) { run_prospect =   0.0f; }    // L1：前瞻起始行（越小看得越远）
+        if(run_prospect > 110.0f) { run_prospect = 110.0f; }    // 再大就只剩画面最下面几行了
         if(run_switch <  0.5f) { run_switch = 0.0f; }
         if(run_switch >= 0.5f) { run_switch = 1.0f; }
 
@@ -858,7 +965,7 @@ int main(void)
 
             /* 3.5 环岛识别（学长的 8 状态机）
                    它可能会调用 Left_Add_Line/Right_Add_Line 修改左右边界来"补线"，
-                   所以必须在 Longest_White_Column() 之后、Err_Sum() 之前调用 —— 这个
+                   所以必须在 Longest_White_Column() 之后、算偏差之前调用 —— 这个
                    顺序和学长主程序里是一模一样的，顺序错了补线就不生效。 */
 #if USE_ISLAND
             Island_Detect();
@@ -867,7 +974,16 @@ int main(void)
             /* 4. 算偏差（给舵机 PD 用）*/
             if(Img_Disappear_Flag == 0)
             {
-                Err = Err_Sum();
+                float e;
+
+                /* ★【前瞻】从"看得见的最远处再往前一段"按权重加权算偏差
+                   （以前用学长的 Err_Sum()，它实际只算了车头正前方那 20 来行，前瞻区被跳过了）
+                   返回 0 = 这一帧一行有效数据都没有（比如整幅图都丢线了），
+                   那就不动 Err，保持上一帧的值，别乱甩 */
+                if(Err_Prospect(&e))
+                {
+                    Err = e;
+                }
             }
 
             /* 4.5 ★保护★ Err 万一是 NaN（学长那个加权平均在"图像里一条线都看不到"时会算 0/0），
@@ -929,11 +1045,11 @@ int main(void)
             memcpy(image_copy, mt9v03x_image, MT9V03X_IMAGE_SIZE);
 #endif
 
-            /* 6. 发一包波形给 VOFA+（14 通道）
+            /* 6. 发一包波形给 VOFA+（15 通道）
                   ★ 1~8 条是"车况"，9~12 条是"参数下行通没通"的证据，
                     第 13 条是"心跳"，用来看"数据到底是不是活的、上位机是不是冻结了" */
             {
-                float osc[14];
+                float osc[15];
                 osc[0] = Err;                                   /* 图像偏差（调 PD 主要看这条）*/
                 osc[1] = (float)Servo_GetAngle();               /* 舵机实际打角 */
                 osc[2] = (float)enc_l;                          /* 左轮转速 */
@@ -948,7 +1064,8 @@ int main(void)
                 osc[11] = (float)Vofa_CmdOk;                    /* ★成功收到的参数条数（只涨不跌）*/
                 osc[12] = (float)(wave_cnt % 1000);             /* ★心跳：一直往上爬 = 数据在动 */
                 osc[13] = err_use;                              /* ★滤波后的偏差（真正送进 PD 的那个）*/
-                Vofa_SendWaves(osc, 14);
+                osc[14] = (float)dbg_prospect;                  /* ★这一帧实际用的前瞻起始行 */
+                Vofa_SendWaves(osc, 15);
                 wave_cnt++;
             }
         }
