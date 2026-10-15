@@ -93,7 +93,10 @@
 #define RUN_AUTO_START      (1)         // 1 = 上电就自动跑（★现在用这个）；0 = 上电停着，等你在 VOFA 里按 S1
 
 #define RUN_P               (3.0f)      // ★P1  舵机 PD 的比例项（值越大打得越狠）
-#define RUN_D               (20.0f)     // ★D1  舵机 PD 的微分项（值越大越"踩刹车"，压摆动）
+                                        //   ⚠ 换成前瞻偏差以后 Err 的大小变了，P 要重新标：
+                                        //     推车进弯看 Err 峰值，P ≈ 40 / Err峰值（比如峰值 25 -> P 从 1.6 开始）
+#define RUN_D               (0.0f)      // ★D1  舵机 PD 的微分项（值越大越"踩刹车"，压摆动）
+                                        //   ⚠ 建议从 0 开始，每次只加一点点；D 太大反而会"打过头再反打"
 #define RUN_OSTU_BIAS       (15)        // ★T1  阈值偏置（-50 ~ +50；背景被误判成白色就加大）
 
 #define ERR_FILTER          (0.35f)     // ★F1  Err 低通滤波强度：0 = 不滤波，0.3~0.5 低速好用
@@ -101,6 +104,8 @@
 
 #define PROSPECT_ROW        (38)        // ★L1  前瞻起始行（行号越小 = 看得越远，0 = 最远，119 = 最近）
 #define PROSPECT_WIN        (21)        // 前瞻窗口高度（行数），和算法文档一致，不用改
+
+#define ERR_D_LIMIT         (20.0f)     // D 项用的"偏差变化量"限幅（像素/帧），防止某一帧抖动把舵机甩飞
 
 //   前瞻权重表（21 个值，对应窗口里第 0~20 行；第 0 行最远，第 20 行最近）
 //   中间那几个大权重（26/27/31/30）就是"最看重的地方"，两端权重小 ——
@@ -157,10 +162,12 @@ static volatile int16 enc_r       = 0;                      // 右轮转速
 static volatile int   dbg_duty    = 0;                      // 中断里实际输出的占空比（波形第 10 条 / 屏幕 Out）
 static volatile int   dbg_prospect = PROSPECT_ROW;          // 这一帧实际用的前瞻起始行（波形第 15 条）
 static volatile float err_use     = 0.0f;                   // 真正送给舵机 PD 的偏差（= 滤波后的 Err）
+static volatile float err_d_frame = 0.0f;                   // 这一帧的偏差变化量（D 项直接用这个，见 Frame_Process）
 static volatile uint16 wave_cnt   = 0;                      // 心跳计数：每发一包波形 +1
 static volatile uint32 isr_ms     = 0;                      // 控制中断自己的计时（软启动用）
 
 static float          err_last    = 0.0f;                   // 上一拍的偏差（微分项用）
+static float          err_use_prev = 0.0f;                  // 上一帧滤波后的偏差（算帧间变化量用）
 static uint8          run_was_on  = 0;                      // 上一拍电机开关的状态（用来抓"刚发车"那一拍）
 
 /* ---- 压"偏差抖动"用的三个状态 ---- */
@@ -367,7 +374,7 @@ void pit_handler0(void)
             use_err = err_use;                          // ★ 用【滤波后】的偏差，不是原始 Err
         }
 
-        d = use_err - err_last;
+        d = err_d_frame;                                // ★ 用【每帧算好】的偏差变化量（见 Frame_Process 第 6.5 步）
         u = run_p * use_err + run_d * d;
 
         if(u >  120.0f) { u =  120.0f; }                // 限幅：偏差再大也不会把舵机一把打死
@@ -463,6 +470,18 @@ static void Frame_Process(void)
         err_filt_val  = Err;
         err_use       = Err;
     }
+
+    /* ---------- 6.5 D 项用的"偏差变化量"：每帧算一次 ----------
+       为什么要每帧算：偏差是【每帧】才更新一次的，而舵机 PD 是在【20ms 中断】里跑的，
+       两者不同步。如果直接在中断里做"这一拍减上一拍"：
+         有时两拍之间是同一帧 -> 差值是 0（D 项白给）
+         有时一拍之间跨了两帧 -> 差值翻倍（D 项猛一下）
+       表现出来就是"一进弯猛打一下、然后反打"。所以统一改成【每帧】算一次差值，
+       中断里直接取用；再限幅，防止某一帧的抖动把舵机一把甩出去。 */
+    err_d_frame  = err_use - err_use_prev;
+    err_use_prev = err_use;
+    if(err_d_frame >  ERR_D_LIMIT) { err_d_frame =  ERR_D_LIMIT; }
+    if(err_d_frame < -ERR_D_LIMIT) { err_d_frame = -ERR_D_LIMIT; }
 
     /* ---------- 7. 整理成三条线（给屏幕画）---------- */
     for(i = 0; i < MT9V03X_H; i++)
@@ -634,7 +653,9 @@ int main(void)
         /* ---------- 从"停"拨到"跑"的那一瞬间，清一下微分项（避免第一拍猛打）---------- */
         if((run_enable > 0.0f) && (run_switch > 0.5f) && (0 == run_was_on))
         {
-            err_last = Err;
+            err_last     = Err;
+            err_use_prev = err_use;                     // 刚发车时把 D 项的历史清干净，避免第一拍猛打
+            err_d_frame  = 0.0f;
         }
         run_was_on = ((run_enable > 0.0f) && (run_switch > 0.5f)) ? 1 : 0;
 
