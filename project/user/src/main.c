@@ -19,8 +19,8 @@
 *   1 = 跑车（★ 平时就用这个）
 *         图像巡线 + 舵机 PD + 电机 + 环岛
 *         · 图像：直接看【屏幕】（本地显示，流畅，不占无线带宽）
-*         · 波形：无线串口 -> VOFA+，13 个通道【从下往上数，第 1 条在最下面】
-*              1 = Err            图像偏差（调 PD 主要看这条）
+*         · 波形：无线串口 -> VOFA+，14 个通道【从下往上数，第 1 条在最下面】
+*              1 = Err            图像偏差【原始值】
 *              2 = 舵机实际打角   Servo_GetAngle()
 *              3 = 左轮转速       编码器
 *              4 = 右轮转速       编码器
@@ -39,6 +39,9 @@
 *                  ★ 12 在涨 = 参数真的进来了，V1 / S1 一定生效
 *             13 = 心跳（锯齿 0~999，每帧 +1，约 20 秒走一圈）
 *                  ★ 它在爬 = 单片机在发数据；它不爬 = 单片机没发（或上位机暂停了）
+*             14 = 滤波后的偏差（= 真正送进舵机 PD 的那个值）
+*                  ★ 把第 1 条和第 14 条放一起看：第 14 条比第 1 条平多少，
+*                    就是滤波压掉了多少抖动。F1 调大 -> 第 14 条更平（但转向更迟钝）
 *         · ★★ 和屏幕对不上怎么办 ★★
 *             屏幕上的 Err 是"此刻"的值，VOFA 的曲线是"历史"。要比就比【最右边最新的那个点】。
 *             JustFloat 协议没有时间戳，所以 VOFA 的横轴是"第几个采样点"，不是秒。
@@ -47,6 +50,7 @@
 *              P1=%f!  -> 舵机 P
 *              D1=%f!  -> 舵机 D
 *              T1=%f!  -> 阈值偏置（可负）
+*              F1=%f!  -> Err 滤波强度（0 = 关；0.3~0.5 好用；越大越平但转向越迟钝）
 *              V1=%f!  -> 电机速度
 *              S1=%f!  -> 电机开关（0=停，1=跑）
 *         · 【上电就自动开始跑】，速度默认 1000 —— 车会自己动，手边别离人
@@ -438,6 +442,24 @@ extern volatile int   Search_Stop_Line;     // 视野长度（最长白列）—
                                         // 车左右摆（画龙） -> D 往上加，或者 P 往下降
                                         // 起始值就是学长的 3 / 20，一次只改一个数
 #define RUN_OSTU_BIAS       (15)        // 阈值偏置（背景误判成白色就加大）
+
+//-------------------------------------------------------------------------------------------------------------------
+// 【压住"图像偏差一直在抖"的两个滤波】—— 这是解决"车停着 Err 也在 0 和 ±1 之间跳"的主要手段
+//
+//   ERR_FILTER  ：Err 的低通滤波强度，0 = 关，0.3~0.5 好用，越大越平滑但转向越迟钝
+//                 ★ 可以在 VOFA 里用滑动条绑命令  F1=%f!  在线改，不用重新烧录
+//                   低速调车：0.35 ~ 0.5；以后提速：调小或调 0（滤波会带来 1~2 帧的滞后）
+//
+//   TH_SMOOTH_K ：大津法阈值的平滑强度（不用在线调，固定就行）
+//                 大津法每帧算出来的阈值会差 1~2 个数，阈值一跳黑线边沿就跳 1 个像素，
+//                 Err 跟着抖。让它慢慢变，边线就稳了。
+//
+//   ⚠ 说明：滤波压的是"抖动"，不是"偏差"。Err 的物理含义不变，
+//      P 的含义也不变，所以你之前按 P=3 调的手感不用重新算。
+//-------------------------------------------------------------------------------------------------------------------
+#define ERR_FILTER          (0.35f)     // F1 的默认值（上电值）
+#define TH_SMOOTH_K         (0.35f)     // 阈值平滑强度（固定）
+
 #define SEND_LINES_ONLY     (0)         // 0 = 发摄像头原图 + 边线【现在用这个】  1 = 只发边线（省带宽，但看不到图）
 
 // 【图传分频】一整幅灰度图是 188x120 = 22560 字节，如果每帧都发，WiFi 根本发不完，
@@ -500,6 +522,9 @@ extern volatile int   Search_Stop_Line;     // 视野长度（最长白列）—
 //   命令 P1=%f!  ->  舵机 P    量程 0 ~ 20   默认 3
 //   命令 D1=%f!  ->  舵机 D    量程 0 ~ 50   默认 20
 //   命令 T1=%f!  ->  阈值偏置  量程 -50 ~ +50  默认 15（可以是负数）
+//   命令 F1=%f!  ->  Err 滤波   量程 0 ~ 0.9  默认 0.35
+//                    0 = 不滤波（提速后用）；0.3~0.5 = 低速调车好用
+//                    ★ 这是专门压"车停着 Err 还在 0 和 ±1 之间跳"的
 //
 //   ★ 命令格式：字母 + 数字 + "=" + 数值 + "!"
 //         所以滑动条绑定的内容要写成一整条，例如  V1=%f!    （%f 是 VOFA 自己替换成数值）
@@ -516,6 +541,7 @@ static volatile float run_duty   = (float)RUN_DUTY;         // V1：电机速度
 static volatile float run_p      = RUN_P;                   // P1：舵机 P
 static volatile float run_d      = RUN_D;                   // D1：舵机 D
 static volatile float run_bias   = (float)RUN_OSTU_BIAS;    // T1：阈值偏置（可负）
+static volatile float run_errfilt = (float)ERR_FILTER;      // F1：Err 低通滤波强度（0 = 关）
 static volatile float run_ramp   = (float)RAMP_MS;          // 起步软启动（固定值，不在电脑上调）
 static volatile float run_switch = (float)RUN_AUTO_START;   // S1：电机开关（上电默认 1 = 跑）
 static volatile float run_view   = (float)RUN_VIEW_MODE;    // 旧方案的"视图"开关（现在没用，留着不影响）
@@ -536,6 +562,19 @@ static uint8 image_copy[MT9V03X_H][MT9V03X_W];
 static volatile uint32 sys_ms    = 0;   // 系统时间，10ms 中断累加
 static volatile uint32 isr_ms    = 0;   // 中断自己的计时（每次中断 +20ms），软启动用它
 static float           err_last  = 0.0f;
+
+/* ---------------- 抑制"图像偏差一直在抖"用的三个状态变量 ----------------
+   Err 抖动有两大来源，这里对应两道处理：
+     ① 大津法阈值每一帧会差 1~2 个数 -> 黑线边沿位置跟着跳 1 个像素 -> Err 抖
+        处理：th_smooth 把阈值做低通（不让它一帧一跳）
+     ② 图像本身的噪声 / 灯光闪烁 -> 边沿位置抖
+        处理：err_filt_val 把 Err 做低通，PD 用滤波后的 err_use（原始 Err 照样发给上位机看）
+   ★ 滤波会让转向稍微"迟钝"一点（滞后约 1/filter 帧）。
+     低速调车时 0.3~0.5 很好用；以后提速了就把它调小，甚至调 0。 */
+static float           th_smooth     = 0.0f;    // 平滑后的阈值（内部用）
+static float           err_filt_val  = 0.0f;    // 滤波后的偏差（内部用）
+static volatile float  err_use       = 0.0f;    // ★ 真正送给舵机 PD 的偏差（= 滤波后的 Err）
+static uint8           err_filt_init = 0;       // 第一次拿到有效 Err 时直接赋值，避免起步时慢慢爬
 
 //-------------------------------------------------------------------------------------------------------------------
 // 10ms 中断：累加系统时间
@@ -598,7 +637,7 @@ void pit_handler0(void)
         }
         else
         {
-            use_err = Err;
+            use_err = err_use;                          // ★ 用【滤波后】的偏差，而不是原始 Err
         }
 
         d        = use_err - err_last;                  // 偏差的变化量（微分项用）
@@ -764,6 +803,7 @@ int main(void)
         if(Vofa_ParamFlag['P'-'A'][1]) { Vofa_ParamFlag['P'-'A'][1] = 0; run_p      = Vofa_Param['P'-'A'][1]; gpio_toggle_level(B9); }
         if(Vofa_ParamFlag['D'-'A'][1]) { Vofa_ParamFlag['D'-'A'][1] = 0; run_d      = Vofa_Param['D'-'A'][1]; gpio_toggle_level(B9); }
         if(Vofa_ParamFlag['T'-'A'][1]) { Vofa_ParamFlag['T'-'A'][1] = 0; run_bias   = Vofa_Param['T'-'A'][1]; gpio_toggle_level(B9); }
+        if(Vofa_ParamFlag['F'-'A'][1]) { Vofa_ParamFlag['F'-'A'][1] = 0; run_errfilt = Vofa_Param['F'-'A'][1]; gpio_toggle_level(B9); }
         if(Vofa_ParamFlag['V'-'A'][1]) { Vofa_ParamFlag['V'-'A'][1] = 0; run_duty   = Vofa_Param['V'-'A'][1]; gpio_toggle_level(B9); }
         if(Vofa_ParamFlag['S'-'A'][1]) { Vofa_ParamFlag['S'-'A'][1] = 0; run_switch = Vofa_Param['S'-'A'][1]; gpio_toggle_level(B9); }
 
@@ -776,6 +816,8 @@ int main(void)
         if(run_d    >   50.0f) { run_d    =   50.0f; }
         if(run_bias <  -50.0f) { run_bias =  -50.0f; }
         if(run_bias >   50.0f) { run_bias =   50.0f; }
+        if(run_errfilt <  0.0f) { run_errfilt =  0.0f; }        // F1：0 = 关滤波
+        if(run_errfilt >  0.9f) { run_errfilt =  0.9f; }        // 太大转向会明显迟钝，限到 0.9
         if(run_switch <  0.5f) { run_switch = 0.0f; }
         if(run_switch >= 0.5f) { run_switch = 1.0f; }
 
@@ -790,8 +832,21 @@ int main(void)
         {
             mt9v03x_finish_flag = 0;
 
-            /* 1. 大津法 + 偏置 */
-            threshold = (int)Camera_GetOSTU(mt9v03x_image) + (int)run_bias;
+            /* 1. 大津法 -> 先做阈值平滑 -> 再加偏置
+                  为什么要平滑：大津法每一帧算出来的阈值会差 1~2 个数，
+                  阈值一跳，黑线边沿的位置就跟着跳 1 个像素 —— 这就是 Err 抖动的一大来源。
+                  让它慢慢跟着变（低通），边线就稳多了。 */
+            {
+                float otsu = (float)Camera_GetOSTU(mt9v03x_image);
+
+                if(th_smooth < 1.0f)                            /* 第一帧：直接赋值，别慢慢爬 */
+                {
+                    th_smooth = otsu;
+                }
+                th_smooth += TH_SMOOTH_K * (otsu - th_smooth);
+
+                threshold = (int)th_smooth + (int)run_bias;
+            }
             if(threshold > 255) { threshold = 255; }
             if(threshold < 1)   { threshold = 1;   }
 
@@ -820,6 +875,28 @@ int main(void)
                    不处理的话：NaN 会一路传进舵机 PD（舵机乱甩）和波形（上位机显示乱码、
                    甚至因为 NaN/无穷大的字节和 JustFloat 帧尾撞车，导致整包数据错位）。 */
             if(Err != Err) { Err = err_last; }
+
+            /* 4.6 ★【滤波】把 Err 的帧间抖动压下去，PD 用的是滤波后的 err_use
+                   - F1 = 0    ：不滤波，原样送给 PD（提速以后用这个）
+                   - F1 = 0.35 ：滤波（默认），Err 的抖动能小一半左右，转向稍微迟钝一点点
+                   - 原始 Err 照旧发到波形第 1 条，滤波后的发到第 14 条，
+                     两条放在一起看，就能看到滤波到底压掉了多少抖动 */
+            if(run_errfilt > 0.01f)
+            {
+                if(0 == err_filt_init)
+                {
+                    err_filt_val  = Err;                        /* 第一次直接赋值 */
+                    err_filt_init = 1;
+                }
+                err_filt_val += run_errfilt * (Err - err_filt_val);
+                err_use       = err_filt_val;
+            }
+            else
+            {
+                err_filt_init = 0;
+                err_filt_val  = Err;
+                err_use       = Err;
+            }
 
             /* 5. 把边界整理成要发送的三个数组（助手会给它们画出来）*/
             for(i = 0; i < MT9V03X_H; i++)
@@ -852,11 +929,11 @@ int main(void)
             memcpy(image_copy, mt9v03x_image, MT9V03X_IMAGE_SIZE);
 #endif
 
-            /* 6. 发一包波形给 VOFA+（13 通道）
+            /* 6. 发一包波形给 VOFA+（14 通道）
                   ★ 1~8 条是"车况"，9~12 条是"参数下行通没通"的证据，
                     第 13 条是"心跳"，用来看"数据到底是不是活的、上位机是不是冻结了" */
             {
-                float osc[13];
+                float osc[14];
                 osc[0] = Err;                                   /* 图像偏差（调 PD 主要看这条）*/
                 osc[1] = (float)Servo_GetAngle();               /* 舵机实际打角 */
                 osc[2] = (float)enc_l;                          /* 左轮转速 */
@@ -870,7 +947,8 @@ int main(void)
                 osc[10] = (float)Vofa_RxBytes;                  /* ★电脑发过来的字节数（只涨不跌）*/
                 osc[11] = (float)Vofa_CmdOk;                    /* ★成功收到的参数条数（只涨不跌）*/
                 osc[12] = (float)(wave_cnt % 1000);             /* ★心跳：一直往上爬 = 数据在动 */
-                Vofa_SendWaves(osc, 13);
+                osc[13] = err_use;                              /* ★滤波后的偏差（真正送进 PD 的那个）*/
+                Vofa_SendWaves(osc, 14);
                 wave_cnt++;
             }
         }
