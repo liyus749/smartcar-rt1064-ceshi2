@@ -560,6 +560,7 @@ static void Threshold_And_Binarize(void)
         th = (int)th_smooth[0] + (int)run_bias;
         if(th > 255) { th = 255; }
         if(th < 1)   { th = 1;   }
+    th_band[0] = (uint8)th;
     }
     Image_Binarization(th);
 #endif
@@ -653,6 +654,11 @@ static void Frame_Process(void)
     Screen_ShowFrame(mt9v03x_image[0], image_two_value[0], line_left, line_mid, line_right);
     Screen_ShowStatus(Err, Island_State, (int)run_duty);
     Screen_ShowParam((int)run_switch, dbg_duty, Vofa_RxBytes, Vofa_CmdOk);
+#if USE_BAND_OTSU
+    Screen_ShowThresholds(th_band, OTSU_BANDS);         /* 屏幕最下面一行：4 段的阈值 */
+#else
+    Screen_ShowThresholds(th_band, 1);
+#endif
 #endif
 
     /* ---------- 9. 发一包波形给 VOFA+（15 通道，顺序见文件头）---------- */
