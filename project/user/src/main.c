@@ -638,6 +638,21 @@ static void Frame_Process(void)
         int l = Left_Line[i];
         int r = Right_Line[i];
 
+        /* ★ 两种行不画线（画 255 = 屏幕那边会跳过，留空）：
+             ① 视野以上的行（i < 120 - 视野长度）：这些行根本没扫过，
+                Left_Line/Right_Line 还是初始化时的 0 和 187 ——
+                以前会把线画到屏幕最左边/最右边，看起来就像"右边线飞到一边去了"，其实那是假的。
+             ② 这一行有边线丢了（Left_Lost_Flag/Right_Lost_Flag = 1）：丢线时边界会被顶到
+                屏幕边缘（2 或 185），画出来同样是"飞到边上"。留空反而能一眼看出"这里丢线了"。 */
+        if((i < (MT9V03X_H - Search_Stop_Line)) ||
+           (1 == Left_Lost_Flag[i]) || (1 == Right_Lost_Flag[i]))
+        {
+            line_left[i]  = 255;
+            line_mid[i]   = 255;
+            line_right[i] = 255;
+            continue;
+        }
+
         if(l < 0)             { l = 0; }
         if(l > MT9V03X_W - 1) { l = MT9V03X_W - 1; }
         if(r < 0)             { r = 0; }
