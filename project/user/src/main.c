@@ -102,10 +102,14 @@
 //      那个数就是目标速度的参考值（比如 30 就是每 10ms 走 30 个编码器计数）。
 //    U1 = 速度环 Kp（比例）     I1 = 速度环 Ki（积分）
 //-------------------------------------------------------------------------------------------------------------------
-#define RUN_SPEED           (800)       // ★V1  上电默认值（开环时 = 占空比 800 = 8%）
+#define RUN_SPEED           (150)       // ★V1  上电默认目标速度（编码器计数/10ms；满速约 460）
 
-#define SPEED_KP_DEFAULT    (0.8f)      // ★U1  速度环 Kp（0 = 关掉比例）
-#define SPEED_KI_DEFAULT    (0.4f)      // ★I1  速度环 Ki（太小到不了目标，太大来回震）
+#define SPEED_KP_DEFAULT    (0.15f)     // ★U1  速度环 Kp（小一点稳；太大输出会在 ±4000 之间来回打）
+#define SPEED_KI_DEFAULT    (0.05f)     // ★I1  速度环 Ki（负责把最后那点误差消掉）
+
+// 速度环里"误差"的限幅：一次误差再大也只按这么大算，
+// 防止起步/换目标时 PI 一下给出几千的占空比，把轮子甩到满速。
+#define ERR_SPD_LIMIT       (300.0f)
 
 //-------------------------------------------------------------------------------------------------------------------
 // 【速度前馈】目标速度 -> 大概需要多少占空比
@@ -221,7 +225,7 @@ static volatile float run_kp_spd   = SPEED_KP_DEFAULT;      // U1：速度环 Kp
 static volatile float run_ki_spd   = SPEED_KI_DEFAULT;      // I1：速度环 Ki
 static volatile float run_n_l      = (float)ENC_LEFT_SIGN;  // N1：左轮编码器方向（1 或 -1）
 static volatile float run_n_r      = (float)ENC_RIGHT_SIGN; // N2：右轮编码器方向（1 或 -1）
-static volatile float run_loop_mode = 0.0f;                 // E1：0 = 开环(V1当占空比，默认)  1 = 闭环(速度PI)
+static volatile float run_loop_mode = 1.0f;                 // E1：1 = 闭环(速度PI，★默认)  0 = 开环(V1当占空比)
 static volatile int   enc_sign_l   = ENC_LEFT_SIGN;         // 给中断用的整数版（主循环同步过来）
 static volatile int   enc_sign_r   = ENC_RIGHT_SIGN;
 static volatile float run_p       = RUN_P;                  // P1：舵机 P
@@ -507,7 +511,7 @@ static void Speed_Control(void)
 
     ref = (int)((float)((int)run_speed) * scale);        /* V1，乘上软启动/降速系数 */
 
-    /* ---------- 3. ★ 开环：V1 直接当占空比（E1 = 0，默认）----------
+    /* ---------- 3. ★ 开环：V1 直接当占空比（E1 = 0）----------
        这一路【完全不看编码器】：V1 填多少，占空比就是多少。
        目的：先用它确认"V1 -> 电机"这条链路是通的、速度确实是能调的。 */
     if(run_loop_mode < 0.5f)
@@ -535,6 +539,12 @@ static void Speed_Control(void)
 
     e_l = (float)target - (float)enc_l;
     e_r = (float)target - (float)enc_r;
+
+    /* ★ 误差限幅：一次误差再大也只按 ±300 算（防止起步/换目标时 PI 一下给出几千占空比）*/
+    if(e_l >  ERR_SPD_LIMIT) { e_l =  ERR_SPD_LIMIT; }
+    if(e_l < -ERR_SPD_LIMIT) { e_l = -ERR_SPD_LIMIT; }
+    if(e_r >  ERR_SPD_LIMIT) { e_r =  ERR_SPD_LIMIT; }
+    if(e_r < -ERR_SPD_LIMIT) { e_r = -ERR_SPD_LIMIT; }
 
     out_l = spd_out_l + run_kp_spd * (e_l - spd_e_last_l) + run_ki_spd * e_l;
     out_r = spd_out_r + run_kp_spd * (e_r - spd_e_last_r) + run_ki_spd * e_r;
@@ -890,6 +900,7 @@ static void Frame_Process(void)
     /* ★ 把"前瞻窗口"画出来：两条黄色虚线之间，就是程序拿来算 Err 的那一段赛道。
           拖 L1 滑动条，黄线会上下移动 —— 往上 = 看得远，往下 = 看脚下。 */
     Screen_ShowProspect((uint8)dbg_prospect, (uint8)(dbg_prospect + dbg_win - 1));
+    Screen_ShowSpeed((int)run_speed, (int)enc_l, (int)enc_r);   /* 目标 / 左轮实测 / 右轮实测 */
 #endif
 
     /* ---------- 9. 发一包波形给 VOFA+（15 通道，顺序见文件头）---------- */
@@ -1041,10 +1052,13 @@ int main(void)
             if(run_speed >  600.0f) { run_speed =  600.0f; }
         }
         if(run_loop_mode <  0.5f) { run_loop_mode = 0.0f; } else { run_loop_mode = 1.0f; }
+        /* U1/I1 上限收紧：滑动条里存的旧值（比如 10）会把速度环打爆 ——
+           输出会在 ±4000 之间每个 10ms 翻一次，轮子满速嗡嗡响、目标值完全不起作用。
+           有了这个上限，坏值最多也只能到 0.5 / 0.15，环不会炸。 */
         if(run_kp_spd   <    0.0f) { run_kp_spd   =    0.0f; }   // U1：速度环 Kp
-        if(run_kp_spd   >   10.0f) { run_kp_spd   =   10.0f; }
+        if(run_kp_spd   >    0.5f) { run_kp_spd   =    0.5f; }
         if(run_ki_spd   <    0.0f) { run_ki_spd   =    0.0f; }   // I1：速度环 Ki
-        if(run_ki_spd   >    5.0f) { run_ki_spd   =    5.0f; }
+        if(run_ki_spd   >   0.15f) { run_ki_spd   =   0.15f; }
         /* N1/N2：编码器方向只能是 +1 或 -1（负数 = 把读数反过来）*/
         if(run_n_l < 0.0f) { run_n_l = -1.0f; } else { run_n_l = 1.0f; }
         if(run_n_r < 0.0f) { run_n_r = -1.0f; } else { run_n_r = 1.0f; }
