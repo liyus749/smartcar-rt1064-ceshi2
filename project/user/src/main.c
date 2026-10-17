@@ -668,6 +668,9 @@ static void Frame_Process(void)
     Screen_ShowFrame(mt9v03x_image[0], image_two_value[0], line_left, line_mid, line_right);
     Screen_ShowStatus(Err, Island_State, (int)run_duty);
     Screen_ShowParam((int)run_switch, dbg_duty, Vofa_RxBytes, Vofa_CmdOk);
+    /* ★ 把"前瞻窗口"画出来：两条黄色虚线之间，就是程序拿来算 Err 的那一段赛道。
+          拖 L1 滑动条，黄线会上下移动 —— 往上 = 看得远，往下 = 看脚下。 */
+    Screen_ShowProspect((uint8)dbg_prospect, (uint8)(dbg_prospect + PROSPECT_WIN - 1));
 #endif
 
     /* ---------- 9. 发一包波形给 VOFA+（15 通道，顺序见文件头）---------- */

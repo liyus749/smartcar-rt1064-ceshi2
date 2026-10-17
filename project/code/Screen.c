@@ -160,6 +160,26 @@ void Screen_ShowParam(int sw, int out_duty, uint32 rx_bytes, uint32 cmd_ok)
     ips200_show_int   (144, SCR_TXT_Y + 64, (int32)cmd_ok, 5);
 }
 
+//-------------------------------------------------------------------------------------------------------------------
+// 函数简介     在图像上画出"前瞻窗口"：上下各一条黄色横虚线
+//
+//   画法：每隔一个像素点一个点（虚线），这样不会把下面的赛道完全挡住。
+//   坐标：图像是 1:1 画在 (SCR_IMG_X, SCR_IMG_Y) 的，所以"图像第 row 行"就是"屏幕第 SCR_IMG_Y+row 行"。
+//-------------------------------------------------------------------------------------------------------------------
+void Screen_ShowProspect(uint8 row_top, uint8 row_bottom)
+{
+    uint16 x;
+
+    if(row_top    >= SCR_IMG_H) { row_top    = (uint8)(SCR_IMG_H - 1); }
+    if(row_bottom >= SCR_IMG_H) { row_bottom = (uint8)(SCR_IMG_H - 1); }
+
+    for(x = 0; x < SCR_IMG_W; x += 2)
+    {
+        ips200_draw_point(SCR_IMG_X + x, SCR_IMG_Y + row_top,    RGB565_YELLOW);
+        ips200_draw_point(SCR_IMG_X + x, SCR_IMG_Y + row_bottom, RGB565_YELLOW);
+    }
+}
+
 
 //===================================================================================================================
 //  屏幕自检（模式 10 用）—— 死循环，不会返回
