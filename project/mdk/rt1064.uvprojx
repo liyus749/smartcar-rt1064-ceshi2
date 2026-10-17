@@ -411,16 +411,6 @@
           <GroupName>code</GroupName>
           <Files>
             <File>
-              <FileName>seekfree_assistant_interface.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\code\seekfree_assistant_interface.c</FilePath>
-            </File>
-            <File>
-              <FileName>seekfree_assistant.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\code\seekfree_assistant.c</FilePath>
-            </File>
-            <File>
               <FileName>zf_device_wifi_spi.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\..\libraries\zf_device\zf_device_wifi_spi.c</FilePath>
@@ -476,16 +466,6 @@
               <FilePath>..\code\Vofa.h</FilePath>
             </File>
             <File>
-              <FileName>Control.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\code\Control.c</FilePath>
-            </File>
-            <File>
-              <FileName>Control.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>..\code\Control.h</FilePath>
-            </File>
-            <File>
               <FileName>GYRO.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\code\GYRO.c</FilePath>
@@ -504,16 +484,6 @@
               <FileName>island.h</FileName>
               <FileType>5</FileType>
               <FilePath>..\code\island.h</FilePath>
-            </File>
-            <File>
-              <FileName>PID.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\code\PID.c</FilePath>
-            </File>
-            <File>
-              <FileName>PID.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>..\code\PID.h</FilePath>
             </File>
           </Files>
         </Group>

@@ -35,15 +35,6 @@ void Screen_Init(void)
 }
 
 //-------------------------------------------------------------------------------------------------------------------
-// 函数简介     清屏
-//-------------------------------------------------------------------------------------------------------------------
-void Screen_Clear(void)
-{
-    ips200_clear();
-    scr_div = 0;
-}
-
-//-------------------------------------------------------------------------------------------------------------------
 // 函数简介     显示一帧：图像 + 三条边线 + 中心参考虚线
 //-------------------------------------------------------------------------------------------------------------------
 void Screen_ShowFrame(const uint8 *gray, const uint8 *bin,
@@ -120,16 +111,8 @@ void Screen_ShowStatus(float err, int state, int duty)
     ips200_show_string(0,  SCR_TXT_Y + 16,  "Isl ");
     ips200_show_int   (40, SCR_TXT_Y + 16,  state, 2);
 
-    ips200_show_string(0,  SCR_TXT_Y + 32,  "Spd ");    /* 目标速度（编码器计数/10ms）*/
+    ips200_show_string(0,  SCR_TXT_Y + 32,  "Spd ");    /* 电机占空比设定值（V1）*/
     ips200_show_int   (40, SCR_TXT_Y + 32,  duty, 4);
-}
-
-//-------------------------------------------------------------------------------------------------------------------
-// 函数简介     显示一行字符串
-//-------------------------------------------------------------------------------------------------------------------
-void Screen_ShowText(uint16 x, uint16 y, const char *str)
-{
-    ips200_show_string(x, y, str);
 }
 
 //-------------------------------------------------------------------------------------------------------------------
@@ -161,7 +144,7 @@ void Screen_ShowParam(int sw, int out_duty, uint32 rx_bytes, uint32 cmd_ok)
 }
 
 //-------------------------------------------------------------------------------------------------------------------
-// 函数简介     在图像上画出"前瞻窗口"：上下各一条黄色横虚线
+// 函数简介     在图像上画两条黄色横虚线，标出"远/中/近"三个分块的分界
 //
 //   画法：每隔一个像素点一个点（虚线），这样不会把下面的赛道完全挡住。
 //   坐标：图像是 1:1 画在 (SCR_IMG_X, SCR_IMG_Y) 的，所以"图像第 row 行"就是"屏幕第 SCR_IMG_Y+row 行"。
@@ -180,122 +163,3 @@ void Screen_ShowProspect(uint8 row_top, uint8 row_bottom)
     }
 }
 
-//-------------------------------------------------------------------------------------------------------------------
-// 函数简介     左右轮速度环状态（两行）
-// 备注信息     格式：  L tgt 150 v 148 d 1300
-//                     R tgt 150 v 151 d 1290
-//               tgt=目标  v=实测  d=输出占空比
-//-------------------------------------------------------------------------------------------------------------------
-static void Screen_ShowOneWheel(uint16 y, const char *tag, int tgt, int v, int d)
-{
-    ips200_show_string(0,   y, tag);
-
-    ips200_show_string(16,  y, "tgt");
-    ips200_show_int   (40,  y, (int32)tgt, 4);
-
-    ips200_show_string(80,  y, "v");
-    ips200_show_int   (96,  y, (int32)v, 4);
-
-    ips200_show_string(136, y, "d");
-    ips200_show_int   (152, y, (int32)d, 4);
-}
-
-void Screen_ShowSpeed(int tgt_l, int v_l, int d_l, int tgt_r, int v_r, int d_r)
-{
-    Screen_ShowOneWheel(SCR_TXT_Y +  96, "L", tgt_l, v_l, d_l);
-    Screen_ShowOneWheel(SCR_TXT_Y + 112, "R", tgt_r, v_r, d_r);
-}
-
-
-//===================================================================================================================
-//  屏幕自检（模式 10 用）—— 死循环，不会返回
-//
-//  它会循环做这些事，每一步停 0.7 秒：
-//    ① 全屏刷 红 -> 绿 -> 蓝 -> 白 -> 黑
-//       能刷出颜色 = 屏幕、接线、驱动全都通了
-//    ② 显示字符串 / 整数 / 浮点数 + 当前用的屏幕类型
-//    ③ 显示一张"模拟的摄像头画面"：灰度渐变 + 中间黑线 + 左中右三条彩色线
-//       位置和真正显示摄像头图像时完全一样 —— 这就是你以后调车看到的样子
-//===================================================================================================================
-static uint8 fake_img[MT9V03X_H][MT9V03X_W];            // 模拟用的"摄像头图像"
-
-void Screen_SelfTest(void)
-{
-    uint8  phase = 0;
-    uint16 i, j;
-    uint16 x;
-
-    // ---------- 先造一张假图：左亮右暗的渐变 ----------
-    for(i = 0; i < MT9V03X_H; i++)
-    {
-        for(j = 0; j < MT9V03X_W; j++)
-        {
-            fake_img[i][j] = (uint8)(255 - (j * 200) / (MT9V03X_W - 1));
-        }
-    }
-
-    while(1)
-    {
-        switch(phase)
-        {
-            // ---------- ① 刷纯色：验"屏幕和接线通不通" ----------
-            case 0:  ips200_full(RGB565_RED);       break;
-            case 1:  ips200_full(RGB565_GREEN);     break;
-            case 2:  ips200_full(RGB565_BLUE);      break;
-            case 3:  ips200_full(RGB565_WHITE);     break;
-            case 4:  ips200_full(RGB565_BLACK);     break;
-
-            // ---------- ② 显示文字和数据：验"字库" ----------
-            case 5:
-                ips200_clear();
-                ips200_show_string(0,   0, "SCREEN  TEST  OK");
-                ips200_show_string(0,  20, "type 0=SPI 1=PAR8 =");
-                ips200_show_int   (170, 20, (int32)IPS_SCREEN_TYPE, 1);
-                ips200_show_string(0,  40, "int     =");
-                ips200_show_int   (80,  40, 12345, 5);
-                ips200_show_string(0,  60, "float   =");
-                ips200_show_float (80,  60, -12.34, 3, 2);
-                ips200_show_string(0,  80, "if you see this");
-                ips200_show_string(0, 100, "screen works !!");
-                break;
-
-            // ---------- ③ 模拟摄像头画面 + 边线（以后调车看到的就是这样）----------
-            case 6:
-                // 灰度图：一次性画完（和以后显示摄像头图像用的是同一个函数）
-                ips200_show_gray_image(SCR_IMG_X, SCR_IMG_Y, fake_img[0],
-                                       MT9V03X_W, MT9V03X_H, SCR_IMG_W, SCR_IMG_H, 0);
-
-                // 中间刷一条黑带，模拟赛道黑线
-                for(i = 35; i < 75; i++)
-                {
-                    for(j = 70; j < 100; j++)
-                    {
-                        ips200_draw_point(SCR_IMG_X + j, SCR_IMG_Y + i, RGB565_BLACK);
-                    }
-                }
-
-                // 三条彩色线：蓝=左边界 绿=中线 红=右边界（和真正调车时的颜色一致）
-                for(i = 0; i < SCR_IMG_H; i++)
-                {
-                    x = (uint16)(60 + (i * 30) / SCR_IMG_H);
-                    ips200_draw_point(SCR_IMG_X + x,  SCR_IMG_Y + i, SCR_COLOR_LINE_L);
-                    ips200_draw_point(SCR_IMG_X + 94, SCR_IMG_Y + i, SCR_COLOR_LINE_M);
-                    ips200_draw_point(SCR_IMG_X + 102 + (uint16)((SCR_IMG_H - i) / 3),
-                                      SCR_IMG_Y + i, SCR_COLOR_LINE_R);
-                }
-
-                ips200_show_string(0, SCR_TXT_Y,      "fake image 188x100");
-                ips200_show_string(0, SCR_TXT_Y + 16, "B=left G=mid R=right");
-                break;
-
-            default:
-                phase = 0;
-                break;
-        }
-
-        system_delay_ms(700);
-
-        phase ++;
-        if(phase > 6) { phase = 0; }
-    }
-}
