@@ -52,6 +52,8 @@
 *      V1=%f!  -> 目标速度          0 ~ 4000（编码器计数/10ms）
 *      U1=%f!  -> 速度环 Kp         0 ~ 10
 *      I1=%f!  -> 速度环 Ki         0 ~ 5
+*      N1=%f!  -> 左轮编码器方向   +1 或 -1（前进时第 3 条要为正）
+*      N2=%f!  -> 右轮编码器方向   +1 或 -1（前进时第 4 条要为正）
 *      S1=%f!  -> 电机开关          0 = 停，1 = 跑
 *
 * ================================ 接线（和主板丝印一致）================================
@@ -133,8 +135,9 @@
 //   注意：电机那边 MOTOR_LEFT_SIGN / MOTOR_RIGHT_SIGN 都是 -1（正占空比 = 前进），
 //         编码器读数要和它对齐，所以这两个系数不一定是 +1。
 //-------------------------------------------------------------------------------------------------------------------
-#define ENC_LEFT_SIGN       (-1)        // 左轮编码器方向（前进时第 3 条要为正）
-#define ENC_RIGHT_SIGN      (+1)        // 右轮编码器方向（前进时第 4 条要为正）
+#define ENC_LEFT_SIGN       (-1)        // 左轮编码器方向【默认值】（前进时第 3 条要为正）
+#define ENC_RIGHT_SIGN      (+1)        // 右轮编码器方向【默认值】（前进时第 4 条要为正）
+                                        // ★ 这两个只是上电默认值；实际用 VOFA 的 N1 / N2 在线改
 #define RAMP_MS             (2000)      // 起步软启动：2 秒慢慢加速，不会一下冲出去
 #define RUN_AUTO_START      (1)         // 1 = 上电就自动跑（★现在用这个）；0 = 上电停着，等你在 VOFA 里按 S1
 
@@ -215,6 +218,10 @@ extern volatile int   Island_State;             // 0 = 没进环岛；1~5 = 环�
 static volatile float run_speed    = (float)RUN_SPEED;       // V1：目标速度（编码器计数/10ms）
 static volatile float run_kp_spd   = SPEED_KP_DEFAULT;      // U1：速度环 Kp
 static volatile float run_ki_spd   = SPEED_KI_DEFAULT;      // I1：速度环 Ki
+static volatile float run_n_l      = (float)ENC_LEFT_SIGN;  // N1：左轮编码器方向（1 或 -1）
+static volatile float run_n_r      = (float)ENC_RIGHT_SIGN; // N2：右轮编码器方向（1 或 -1）
+static volatile int   enc_sign_l   = ENC_LEFT_SIGN;         // 给中断用的整数版（主循环同步过来）
+static volatile int   enc_sign_r   = ENC_RIGHT_SIGN;
 static volatile float run_p       = RUN_P;                  // P1：舵机 P
 static volatile float run_d       = RUN_D;                  // D1：舵机 D
 static volatile float run_bias    = (float)RUN_OSTU_BIAS;   // T1：阈值偏置（可负）
@@ -554,9 +561,9 @@ void pit_handler1(void)
 #endif
 
     /* 编码器：每 10ms 的计数就代表"这一小段时间转了多少"，也就是转速 */
-    enc_l = (int16)((int32)ENC_LEFT_SIGN  * (int32)encoder_get_count(QTIMER1_ENCODER1));   // 左轮
+    enc_l = (int16)(enc_sign_l * (int32)encoder_get_count(QTIMER1_ENCODER1));   // 左轮（方向可在线改）
     encoder_clear_count(QTIMER1_ENCODER1);
-    enc_r = (int16)((int32)ENC_RIGHT_SIGN * (int32)encoder_get_count(QTIMER1_ENCODER2));   // 右轮
+    enc_r = (int16)(enc_sign_r * (int32)encoder_get_count(QTIMER1_ENCODER2));   // 右轮（方向可在线改）
     encoder_clear_count(QTIMER1_ENCODER2);
 
     Speed_Control();                                    /* ★ 速度闭环：每 10ms 调一次 */
@@ -979,7 +986,9 @@ int main(void)
         /* 命令格式：【字母】【数字】=【数值】!
               P1 舵机P    D1 舵机D    T1 阈值偏置（可负）
               F1 Err滤波  L1 前瞻起始行  W1 前瞻窗口行数  C1 Err偏置
-              V1 目标速度  U1 速度环Kp  I1 速度环Ki  S1 电机开关（0 = 停，1 = 跑）
+              V1 目标速度  U1 速度环Kp  I1 速度环Ki
+              N1 左轮编码器方向  N2 右轮编码器方向（+1 / -1）
+              S1 电机开关（0 = 停，1 = 跑）
            ★ 每收到一次参数 B9 闪一下 —— 这是"参数到底有没有传进来"最直接的证据 */
         if(Vofa_ParamFlag['P'-'A'][1]) { Vofa_ParamFlag['P'-'A'][1] = 0; run_p       = Vofa_Param['P'-'A'][1]; gpio_toggle_level(B9); }
         if(Vofa_ParamFlag['D'-'A'][1]) { Vofa_ParamFlag['D'-'A'][1] = 0; run_d       = Vofa_Param['D'-'A'][1]; gpio_toggle_level(B9); }
@@ -991,6 +1000,8 @@ int main(void)
         if(Vofa_ParamFlag['V'-'A'][1]) { Vofa_ParamFlag['V'-'A'][1] = 0; run_speed   = Vofa_Param['V'-'A'][1]; gpio_toggle_level(B9); }
         if(Vofa_ParamFlag['U'-'A'][1]) { Vofa_ParamFlag['U'-'A'][1] = 0; run_kp_spd  = Vofa_Param['U'-'A'][1]; gpio_toggle_level(B9); }
         if(Vofa_ParamFlag['I'-'A'][1]) { Vofa_ParamFlag['I'-'A'][1] = 0; run_ki_spd  = Vofa_Param['I'-'A'][1]; gpio_toggle_level(B9); }
+        if(Vofa_ParamFlag['N'-'A'][1]) { Vofa_ParamFlag['N'-'A'][1] = 0; run_n_l     = Vofa_Param['N'-'A'][1]; gpio_toggle_level(B9); }
+        if(Vofa_ParamFlag['N'-'A'][2]) { Vofa_ParamFlag['N'-'A'][2] = 0; run_n_r     = Vofa_Param['N'-'A'][2]; gpio_toggle_level(B9); }
         if(Vofa_ParamFlag['S'-'A'][1]) { Vofa_ParamFlag['S'-'A'][1] = 0; run_switch  = Vofa_Param['S'-'A'][1]; gpio_toggle_level(B9); }
 
         /* ---------- 安全限幅：防止滑动条拖过头把车弄失控 ---------- */
@@ -1000,6 +1011,11 @@ int main(void)
         if(run_kp_spd   >   10.0f) { run_kp_spd   =   10.0f; }
         if(run_ki_spd   <    0.0f) { run_ki_spd   =    0.0f; }   // I1：速度环 Ki
         if(run_ki_spd   >    5.0f) { run_ki_spd   =    5.0f; }
+        /* N1/N2：编码器方向只能是 +1 或 -1（负数 = 把读数反过来）*/
+        if(run_n_l < 0.0f) { run_n_l = -1.0f; } else { run_n_l = 1.0f; }
+        if(run_n_r < 0.0f) { run_n_r = -1.0f; } else { run_n_r = 1.0f; }
+        enc_sign_l = (run_n_l < 0.0f) ? -1 : 1;
+        enc_sign_r = (run_n_r < 0.0f) ? -1 : 1;
         if(run_p        <    0.0f) { run_p        =    0.0f; }
         if(run_p        >   20.0f) { run_p        =   20.0f; }
         if(run_d        <    0.0f) { run_d        =    0.0f; }
