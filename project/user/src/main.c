@@ -103,6 +103,20 @@
 
 #define SPEED_KP_DEFAULT    (0.8f)      // ★U1  速度环 Kp（0 = 关掉比例）
 #define SPEED_KI_DEFAULT    (0.4f)      // ★I1  速度环 Ki（太小到不了目标，太大来回震）
+
+//-------------------------------------------------------------------------------------------------------------------
+// 【速度前馈】目标速度 -> 大概需要多少占空比
+//
+//   ★ 实测（你的车）：占空比 4000 时，轮速约 460 计数/10ms
+//        => 每 1 个"速度单位"大约需要 4000/460 ≈ 8.7 的占空比
+//
+//   为什么要有它：PI 从 0 开始一点点往上加，目标一大就要好久才追上（还会冲过头）。
+//   有了前馈，一上来就先把占空比给到"大概该有的值"，剩下的偏差再交给 PI 修正。
+//
+//   ★ 所以 V1 的可用范围是 0 ~ 460（满速）。填 1000、2000 这种只会让占空比一直顶在 4000：
+//     车全速跑、而且怎么调都没变化 —— 这就是你现在遇到的现象。
+//-------------------------------------------------------------------------------------------------------------------
+#define SPEED_FF_PER_UNIT   (8.7f)
 #define RAMP_MS             (2000)      // 起步软启动：2 秒慢慢加速，不会一下冲出去
 #define RUN_AUTO_START      (1)         // 1 = 上电就自动跑（★现在用这个）；0 = 上电停着，等你在 VOFA 里按 S1
 
@@ -429,6 +443,7 @@ static void Speed_Control(void)
     float e_r;
     float out_l;
     float out_r;
+    float ff;
 
     isr_ms += 10;                                       /* 软启动计时（10ms 一步） */
 
@@ -479,14 +494,21 @@ static void Speed_Control(void)
     spd_e_last_l = e_l;
     spd_e_last_r = e_r;
 
-    /* ---------- 3. 限幅（= 同时防积分饱和）---------- */
+    /* ---------- 3. 前馈：先按"目标速度大概需要多少占空比"给一个基准 ---------- */
+    ff = SPEED_FF_PER_UNIT * (float)target;
+    if(ff >  (float)MOTOR_DUTY_MAX) { ff =  (float)MOTOR_DUTY_MAX; }
+
+    out_l += ff;
+    out_r += ff;
+
+    /* ---------- 4. 限幅（= 同时防积分饱和）---------- */
     if(out_l >  (float)MOTOR_DUTY_MAX) { out_l =  (float)MOTOR_DUTY_MAX; }
     if(out_l < -(float)MOTOR_DUTY_MAX) { out_l = -(float)MOTOR_DUTY_MAX; }
     if(out_r >  (float)MOTOR_DUTY_MAX) { out_r =  (float)MOTOR_DUTY_MAX; }
     if(out_r < -(float)MOTOR_DUTY_MAX) { out_r = -(float)MOTOR_DUTY_MAX; }
 
-    spd_out_l = out_l;
-    spd_out_r = out_r;
+    spd_out_l = out_l - ff;                             /* PI 部分单独存（下一拍继续累加）*/
+    spd_out_r = out_r - ff;
 
     duty_l   = (int)out_l;
     duty_r   = (int)out_r;
@@ -955,7 +977,7 @@ int main(void)
 
         /* ---------- 安全限幅：防止滑动条拖过头把车弄失控 ---------- */
         if(run_speed    <    0.0f) { run_speed    =    0.0f; }   // V1：目标速度（计数/10ms）
-        if(run_speed    > 4000.0f) { run_speed    = 4000.0f; }
+        if(run_speed    >  600.0f) { run_speed    =  600.0f; }   // 实测满速约 460，超过就是全速
         if(run_kp_spd   <    0.0f) { run_kp_spd   =    0.0f; }   // U1：速度环 Kp
         if(run_kp_spd   >   10.0f) { run_kp_spd   =   10.0f; }
         if(run_ki_spd   <    0.0f) { run_ki_spd   =    0.0f; }   // I1：速度环 Ki
