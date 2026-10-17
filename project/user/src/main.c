@@ -39,15 +39,16 @@
 *     12 = 成功收到的参数条数（只涨不跌）  ★ 在涨 = 参数确实进到单片机了
 *     13 = 心跳（锯齿 0~999）              ★ 在爬 = 单片机和上位机都正常
 *     14 = 滤波后的偏差（= 真正送进 PD 的那个值）
-*     15 = 这一帧实际用的前瞻起始行
+*     15 = 这一帧参与算偏差的有效行数（太小 = 边线找得不好）
 *
 *   调参命令（滑动条绑定，格式：字母 + 数字 + "=" + 数值 + "!"）：
 *      P1=%f!  -> 舵机 P           0 ~ 20
 *      D1=%f!  -> 舵机 D           0 ~ 50
 *      T1=%f!  -> 阈值偏置（可负）  -50 ~ +50
 *      F1=%f!  -> Err 滤波强度      0 ~ 0.9（0 = 关滤波）
-*      L1=%f!  -> 前瞻起始行        0 ~ 110（越小 = 看得越远）
-*      W1=%f!  -> 前瞻窗口行数      8 ~ 40（越大 = 越平滑、重心越靠近脚下）
+*      R1=%f!  -> 远块权重          0 ~ 5（0 = 完全不看远处）
+*      R2=%f!  -> 中块权重          0 ~ 5
+*      R3=%f!  -> 近块权重          0 ~ 5（★默认 1 / 2 / 2）
 *      C1=%f!  -> Err 偏置          -50 ~ 50（把直道零点归零：显示 -10 就把 C1 设成 -10，即 C1 = 你看到的 Err）
 *      V1=%f!  -> 电机占空比        0 ~ 4000（800 = 8%，★平时只调这一个）
 *      S1=%f!  -> 电机开关          0 = 停，1 = 跑
@@ -132,23 +133,35 @@
 #define USE_BAND_OTSU       (1)
 #define OTSU_BANDS          (4)         // 分几段（120 行 / 4 = 每段 30 行）
 
-#define PROSPECT_ROW        (38)        // ★L1  前瞻起始行（行号越小 = 看得越远，0 = 最远，119 = 最近）
-#define PROSPECT_WIN        (21)        // 权重表的点数（算法文档里的 21 个权重）——这是表的长度，不是窗口高度
-                                        //   窗口高度用 W1 在线调（8 ~ 40 行），权重表会按比例拉伸过去
+//-------------------------------------------------------------------------------------------------------------------
+// 【偏差：远 / 中 / 近 三段分块加权】
+//
+//   做法：
+//     1. 先从画面里找出"看得见赛道的那一段"：从最远一行（100 − 视野长度）到最下面一行；
+//     2. 把这一段【等分成三块】：远块（上 1/3）、中块（中间 1/3）、近块（下 1/3）；
+//     3. 每一块里，把"两边边线都有效"的行的中线取平均，得到这一块的偏差；
+//     4. 三块的偏差按 R1 / R2 / R3 加权平均，就是最终 Err。
+//
+//   所以 R1/R2/R3 就是你要的"远处占多少、中间占多少、近处占多少"：
+//       R1 = 1, R2 = 1, R3 = 1  -> 三段一样重
+//       R1 = 0                   -> 完全不看远处（只看中+近）
+//       R1 = 1, R2 = 2, R3 = 2   -> 中近为主（★默认，适合小弯多、低速）
+//       R1 = 2, R2 = 2, R3 = 1   -> 重视远景（提速、缓弯用）
+//     ★ 权重是相对比例，不是百分比：1/2/2 和 0.5/1/1 效果完全一样。
+//
+//   丢线处理：某一行只要有一侧边线是"丢线"状态，这一行就不参与；整块有效行太少也整块跳过。
+//   连续性：从近往远扫，某一行中线如果和"上一行有效的"差太多（> ERR_SPIKE_LIMIT），
+//           判定为假点，跳过（防止背景里误匹配出来的边线把偏差带飞）。
+//-------------------------------------------------------------------------------------------------------------------
+#define ZONE_FAR_DEFAULT    (1.0f)      // ★R1  远块权重
+#define ZONE_MID_DEFAULT    (2.0f)      // ★R2  中块权重
+#define ZONE_NEAR_DEFAULT   (2.0f)      // ★R3  近块权重
+#define ZONE_W_MAX          (5.0f)      // 单个权重上限
+#define ZONE_MIN_ROWS       (3)         // 一块里至少要有几行有效数据才算数
 
 #define ERR_D_LIMIT         (20.0f)     // D 项用的"偏差变化量"限幅（像素/帧），防止某一帧抖动把舵机甩飞
 
 #define ERR_SPIKE_LIMIT     (15)        // 一行中线和"左右相邻两行平均"差超过这么多像素 -> 当坏行丢掉
-
-//   前瞻权重表（21 个值，对应窗口里第 0~20 行；第 0 行最远，第 20 行最近）
-//   中间那几个大权重（26/27/31/30）就是"最看重的地方"，两端权重小 ——
-//   这样远处的一点点抖动不会主导偏差，同时又能提前看到弯道。
-static const uint8 Prospect_Weight[PROSPECT_WIN] =
-{
-    10, 10, 11, 26, 27, 31, 30, 25, 25, 10,
-     7,  6,  6,  6,  5,  4,  4,  4,  3,  3,
-    12
-};
 
 #define USE_SCREEN          (1)         // 1 = 用并口屏显示图像+边线；0 = 不用屏幕（省时间）
 #define USE_ISLAND          (1)         // 1 = 启用环岛识别（学长的 island.c）；0 = 关掉，只巡线
@@ -184,8 +197,9 @@ static volatile float run_p       = RUN_P;                  // P1：舵机 P
 static volatile float run_d       = RUN_D;                  // D1：舵机 D
 static volatile float run_bias    = (float)RUN_OSTU_BIAS;   // T1：阈值偏置（可负）
 static volatile float run_errfilt = (float)ERR_FILTER;      // F1：Err 低通滤波强度（0 = 关）
-static volatile float run_prospect = (float)PROSPECT_ROW;   // L1：前瞻起始行（越小看得越远）
-static volatile float run_win      = (float)PROSPECT_WIN;    // W1：前瞻窗口高度（行数，8~40；越大越平滑、重心越靠脚下）
+static volatile float run_w_far    = ZONE_FAR_DEFAULT;       // R1：远块权重
+static volatile float run_w_mid    = ZONE_MID_DEFAULT;       // R2：中块权重
+static volatile float run_w_near   = ZONE_NEAR_DEFAULT;      // R3：近块权重
 static volatile float run_err_bias = 0.0f;                   // C1：Err 偏置（把直道零点归零用）
 static volatile float run_switch  = (float)RUN_AUTO_START;  // S1：电机开关（0 = 停，1 = 跑）
 
@@ -196,8 +210,9 @@ static volatile int16 enc_l       = 0;                      // 左轮转速（�
 static volatile int16 enc_r       = 0;                      // 右轮转速
 static volatile int   dbg_duty    = 0;                      // 中断里实际输出的占空比（波形第 10 条 / 屏幕 Out）
 static uint16         hb_cnt      = 0;                      // 心跳灯计数（25 x 20ms = 500ms）
-static volatile int   dbg_prospect = PROSPECT_ROW;          // 这一帧实际用的前瞻起始行（波形第 15 条）
-static volatile int   dbg_win      = PROSPECT_WIN;           // 这一帧实际用的窗口行数
+static volatile int   dbg_valid_rows = 0;                    // 这一帧参与算偏差的有效行数（波形第 15 条）
+static volatile int   dbg_zone_far  = 0;                     // 远块起始行（给屏幕画分界线用）
+static volatile int   dbg_zone_mid  = 0;                     // 中块起始行
 static volatile float err_use     = 0.0f;                   // 真正送给舵机 PD 的偏差（= 滤波后的 Err）
 static volatile float err_d_frame = 0.0f;                   // 这一帧的偏差变化量（D 项直接用这个，见 Frame_Process）
 static volatile uint16 wave_cnt   = 0;                      // 心跳计数：每发一包波形 +1
@@ -283,115 +298,108 @@ static void Camera_InitForever(void)
 
 
 //===================================================================================================================
-//  五、前瞻加权偏差（★ 这就是"前瞻"的核心）
+//  五、偏差：远 / 中 / 近 三段分块加权（说明见文件头"一、可调参数"）
 //
-//  做法（和算法文档里的"加权前瞻"一致）：
-//    1. 从 run_prospect 行（L1）开始，往下取 run_win 行（W1，默认 21 行）
-//       （第 0 行最远，第 119 行最近）
-//    2. 这个窗口会被【自动限制在看得见的范围内】：
-//         Search_Stop_Line = 从图像底部往上能看到多少行，
-//         所以"能看到的最远那一行" = MT9V03X_H - Search_Stop_Line。
-//         你把 L1 调得再小，也不会去看一条本来就看不见的路。
-//    3. 每一行算 (画面中心 94 - 这一行的中线)，再乘权重加起来，最后除以权重和
-//    4. ★ 丢线的行直接跳过（不算）：丢线那一行的边界会被顶到屏幕边缘（左 2 / 右 185），
-//       "中线"于是跑到画面中间，会算出一个假偏差（单边丢线能有 ±20）。跳过它就不会被带偏。
-//
-//  备注     学长原来的 Err_Sum() 是从图像最底行往上扫到 Search_Stop_Line 行，
-//            在直道（Search_Stop_Line 有 70 多）时实际只覆盖了车头正前方那 20 来行，
-//            权重表里 3~15 的"前瞻区"（约 38~59 行）被整个跳过 —— 所以现在换成这个。
-//            Err_Sum() 还留在 Control.c 里没删，想回退随时能回。
+//  流程：
+//    1. 找出看得见赛道的行：[100 − 视野长度, 99]
+//    2. 这一段等分成三块：远块（上 1/3）、中块、近块（下 1/3）
+//    3. 每一行算中线；丢线的行不用；和上下相邻两行平均差太多的"孤立假点"也不用
+//    4. 每块内部取平均偏差，三块再按 R1/R2/R3 加权合成 -> Err
 //===================================================================================================================
-static uint8 Err_Prospect(float *err_out)
+static int   zone_mid[MT9V03X_H];                  /* 每一行的中线 */
+static uint8 zone_ok[MT9V03X_H];                   /* 这一行能不能用 */
+
+static uint8 Err_Zone(float *err_out)
 {
-    int   start;
     int   farthest;
-    int   win;
-    int   i;
-    int   k;
-    int   n;
-    int   mid[40];                                      /* 窗口里每一行的中线（最多 40 行）*/
-    uint8 ok[40];                                       /* 这一行能不能用 */
-    float sum  = 0.0f;
-    float wsum = 0.0f;
-    float w;
+    int   span;
+    int   far_end;
+    int   mid_end;
+    int   row;
+    int   z;
+    int   v;
+    int   cnt[3];
+    float sum[3];
+    float w[3];
+    float total_e = 0.0f;
+    float total_w = 0.0f;
 
-    /* ---------- 0. 窗口高度（W1，在线可调，8 ~ 40 行）----------
-       窗口越高 = 一次平均进来的行越多 = 曲线更平滑、并且重心往"脚下"偏一点
-       （因为窗口是从 L1 往下延伸的，加高就是把更近的行也纳进来） */
-    win = (int)run_win;
-    if(win <  8) { win =  8; }
-    if(win > 40) { win = 40; }
+    /* ---------- 1. 看得见赛道的那一段 ---------- */
+    farthest = MT9V03X_H - Search_Stop_Line;
+    if(farthest < 0)             { farthest = 0; }
+    if(farthest > MT9V03X_H - 2) { farthest = MT9V03X_H - 2; }
 
-    /* ---------- 1. 决定前瞻起始行 ---------- */
-    start = (int)run_prospect;
+    span = MT9V03X_H - farthest;
+    if(span < 9)                 { return 0; }          /* 看得太少，这帧不算 */
 
-    if(start < 0)                 { start = 0; }
-    if(start > MT9V03X_H - 2)     { start = MT9V03X_H - 2; }
+    far_end = farthest + span / 3;                      /* 远块：[farthest, far_end) */
+    mid_end = farthest + (span * 2) / 3;                /* 中块：[far_end, mid_end) 近块：[mid_end, 99] */
 
-    farthest = MT9V03X_H - Search_Stop_Line;            /* 看得见的最远那一行（行号越小越远） */
-    if(farthest < 0)              { farthest = 0; }
-    if(farthest > MT9V03X_H - 2)  { farthest = MT9V03X_H - 2; }
-    if(start < farthest)          { start = farthest; } /* 别往"看不见的"行去看 */
+    dbg_zone_far = far_end;
+    dbg_zone_mid = mid_end;
 
-    dbg_prospect = start;                               /* 发到波形第 15 条，方便看前瞻取在哪一行 */
-    dbg_win      = win;
-
-    /* ---------- 2. 先把窗口里每一行的"中线"取出来（丢掉标了丢线的行）---------- */
-    n = 0;
-    for(i = 0; i < win; i++)
+    /* ---------- 2. 取每一行的中线和有效性 ---------- */
+    for(row = farthest; row < MT9V03X_H; row++)
     {
-        int row = start + i;                            /* 从远到近 */
-
-        if(row > (MT9V03X_H - 1))   { break; }          /* 已经到图像最下面了 */
-
-        mid[n] = (Left_Line[row] + Right_Line[row]) >> 1;
-        ok[n]  = ((0 == Left_Lost_Flag[row]) && (0 == Right_Lost_Flag[row])) ? 1 : 0;
-        n++;
+        zone_mid[row] = (Left_Line[row] + Right_Line[row]) >> 1;
+        zone_ok[row]  = ((0 == Left_Lost_Flag[row]) && (0 == Right_Lost_Flag[row])) ? 1 : 0;
     }
 
-    /* ---------- 3. ★ 去掉"孤立的坏行"----------
-       做法：某一行的中线，如果和【它上、下相邻两行的平均值】差得太多（> ERR_SPIKE_LIMIT），
-             就说明这一行是孤立的假点（最典型：右边界在背景里匹配到假线，一下跑到画面边上）。
-             这种行直接不用。
-       为什么和"相邻两行平均"比：正常的弯道里中线是平滑变化的，和邻居的平均值只差几像素；
-             而假点是"突一下"，和两边都对不上 —— 所以这一招只杀假点，不会误伤正常的弯道。 */
-    for(i = 1; i < (n - 1); i++)
+    /* ---------- 3. 去掉"孤立的假点"----------
+       一行中线如果和"上下相邻两行的平均"差太多（> ERR_SPIKE_LIMIT），就是假点
+       （典型情况：右边界在背景里匹配到假线，一下跑到画面边上）。
+       和邻居平均比而不是和某一行比：正常的弯道里中线是平滑变化的，不会误伤。 */
+    for(row = farthest + 1; row < MT9V03X_H - 1; row++)
     {
         int avg;
         int d;
 
-        if(0 == ok[i])                        { continue; }
-        if((0 == ok[i-1]) || (0 == ok[i+1]))  { continue; }     /* 邻居本身无效，不做判断 */
+        if(0 == zone_ok[row])                        { continue; }
+        if((0 == zone_ok[row-1]) || (0 == zone_ok[row+1])) { continue; }
 
-        avg = (mid[i-1] + mid[i+1]) >> 1;
-        d   = mid[i] - avg;
+        avg = (zone_mid[row-1] + zone_mid[row+1]) >> 1;
+        d   = zone_mid[row] - avg;
 
-        if((d > ERR_SPIKE_LIMIT) || (d < -ERR_SPIKE_LIMIT))
-        {
-            ok[i] = 0;                                          /* ★ 孤立的假点，丢掉 */
-        }
+        if((d > ERR_SPIKE_LIMIT) || (d < -ERR_SPIKE_LIMIT)) { zone_ok[row] = 0; }
     }
 
-    /* ---------- 4. 加权平均 ---------- */
-    for(i = 0; i < n; i++)
+    /* ---------- 4. 分块累加 ---------- */
+    cnt[0] = cnt[1] = cnt[2] = 0;
+    sum[0] = sum[1] = sum[2] = 0.0f;
+    dbg_valid_rows = 0;
+
+    for(row = farthest; row < MT9V03X_H; row++)
     {
-        if(0 == ok[i]) { continue; }
+        if(0 == zone_ok[row]) { continue; }
 
-        /* 把 21 点的权重表按比例"拉伸"到 n 点：n = 21 时原样用，n = 31 时每个权重覆盖更多行 */
-        k = (i * PROSPECT_WIN) / n;
-        if(k > (PROSPECT_WIN - 1)) { k = (PROSPECT_WIN - 1); }
+        if     (row < far_end) { z = 0; }               /* 远块 */
+        else if(row < mid_end) { z = 1; }               /* 中块 */
+        else                   { z = 2; }               /* 近块 */
 
-        w     = (float)Prospect_Weight[k];
-        sum  += (float)((MT9V03X_W / 2) - mid[i]) * w;
-        wsum += w;
+        v = zone_mid[row];
+
+        sum[z] += (float)((MT9V03X_W / 2) - v);
+        cnt[z]++;
+        dbg_valid_rows++;
     }
 
-    if(wsum < 0.5f)
+    /* ---------- 5. 每块取平均，再按权重合成 ---------- */
+    w[0] = run_w_far;
+    w[1] = run_w_mid;
+    w[2] = run_w_near;
+
+    for(z = 0; z < 3; z++)
     {
-        return 0;                                       /* 一行有效的都没有：这帧不算，保持上一帧 */
+        if(cnt[z] < ZONE_MIN_ROWS) { continue; }        /* 这块有效行太少，跳过 */
+        if(w[z] <= 0.001f)         { continue; }        /* 权重为 0 = 不看这块 */
+
+        total_e += w[z] * (sum[z] / (float)cnt[z]);
+        total_w += w[z];
     }
 
-    *err_out = (sum / wsum) - run_err_bias;             /* ★ C1：Err 偏置（直道零点归零用） */
+    if(total_w < 0.001f) { return 0; }                  /* 三块都没用上：这帧不算 */
+
+    *err_out = (total_e / total_w) - run_err_bias;      /* C1：零点偏置 */
     return 1;
 }
 
@@ -671,7 +679,7 @@ static void Frame_Process(void)
     {
         float e;
 
-        if(Err_Prospect(&e))                            /* 返回 0 = 这帧一行有效数据都没有 */
+                if(Err_Zone(&e))                                /* 返回 0 = 这帧有效数据太少 */
         {
             Err = e;
         }
@@ -748,7 +756,8 @@ static void Frame_Process(void)
     Screen_ShowParam((int)run_switch, dbg_duty, Vofa_RxBytes, Vofa_CmdOk);
     /* ★ 把"前瞻窗口"画出来：两条黄色虚线之间，就是程序拿来算 Err 的那一段赛道。
           拖 L1 滑动条，黄线会上下移动 —— 往上 = 看得远，往下 = 看脚下。 */
-    Screen_ShowProspect((uint8)dbg_prospect, (uint8)(dbg_prospect + dbg_win - 1));
+    /* 两条黄线 = 分块边界：上面是远块/中块的分界，下面是中块/近块的分界 */
+    Screen_ShowProspect((uint8)dbg_zone_far, (uint8)dbg_zone_mid);
 #endif
 
     /* ---------- 9. 发一包波形给 VOFA+（15 通道，顺序见文件头）---------- */
@@ -769,7 +778,7 @@ static void Frame_Process(void)
         osc[11] = (float)Vofa_CmdOk;                    /* 12 成功收到的参数条数（只涨不跌）*/
         osc[12] = (float)(wave_cnt % 1000);             /* 13 心跳（锯齿）*/
         osc[13] = err_use;                              /* 14 滤波后的偏差（PD 用的就是它）*/
-        osc[14] = (float)dbg_prospect;                  /* 15 这一帧实际用的前瞻起始行 */
+        osc[14] = (float)dbg_valid_rows;                /* 15 这一帧参与算偏差的有效行数 */
 
         Vofa_SendWaves(osc, 15);
         wave_cnt++;
@@ -868,7 +877,7 @@ int main(void)
 
         /* 命令格式：【字母】【数字】=【数值】!
               P1 舵机P    D1 舵机D    T1 阈值偏置（可负）
-              F1 Err滤波  L1 前瞻起始行  W1 前瞻窗口行数  C1 Err偏置
+              F1 Err滤波  R1/R2/R3 远中近三块权重  C1 Err偏置
               V1 目标速度  U1 速度环Kp  I1 速度环Ki
               S1 电机开关（0 = 停，1 = 跑）
            ★ 每收到一次参数 B9 闪一下 —— 这是"参数到底有没有传进来"最直接的证据 */
@@ -876,8 +885,9 @@ int main(void)
         if(Vofa_ParamFlag['D'-'A'][1]) { Vofa_ParamFlag['D'-'A'][1] = 0; run_d       = Vofa_Param['D'-'A'][1]; gpio_toggle_level(B9); }
         if(Vofa_ParamFlag['T'-'A'][1]) { Vofa_ParamFlag['T'-'A'][1] = 0; run_bias    = Vofa_Param['T'-'A'][1]; gpio_toggle_level(B9); }
         if(Vofa_ParamFlag['F'-'A'][1]) { Vofa_ParamFlag['F'-'A'][1] = 0; run_errfilt = Vofa_Param['F'-'A'][1]; gpio_toggle_level(B9); }
-        if(Vofa_ParamFlag['L'-'A'][1]) { Vofa_ParamFlag['L'-'A'][1] = 0; run_prospect= Vofa_Param['L'-'A'][1]; gpio_toggle_level(B9); }
-        if(Vofa_ParamFlag['W'-'A'][1]) { Vofa_ParamFlag['W'-'A'][1] = 0; run_win     = Vofa_Param['W'-'A'][1]; gpio_toggle_level(B9); }
+        if(Vofa_ParamFlag['R'-'A'][1]) { Vofa_ParamFlag['R'-'A'][1] = 0; run_w_far   = Vofa_Param['R'-'A'][1]; gpio_toggle_level(B9); }
+        if(Vofa_ParamFlag['R'-'A'][2]) { Vofa_ParamFlag['R'-'A'][2] = 0; run_w_mid   = Vofa_Param['R'-'A'][2]; gpio_toggle_level(B9); }
+        if(Vofa_ParamFlag['R'-'A'][3]) { Vofa_ParamFlag['R'-'A'][3] = 0; run_w_near  = Vofa_Param['R'-'A'][3]; gpio_toggle_level(B9); }
         if(Vofa_ParamFlag['C'-'A'][1]) { Vofa_ParamFlag['C'-'A'][1] = 0; run_err_bias= Vofa_Param['C'-'A'][1]; gpio_toggle_level(B9); }
         if(Vofa_ParamFlag['V'-'A'][1]) { Vofa_ParamFlag['V'-'A'][1] = 0; run_speed   = Vofa_Param['V'-'A'][1]; gpio_toggle_level(B9); }
         if(Vofa_ParamFlag['S'-'A'][1]) { Vofa_ParamFlag['S'-'A'][1] = 0; run_switch  = Vofa_Param['S'-'A'][1]; gpio_toggle_level(B9); }
@@ -894,10 +904,12 @@ int main(void)
         if(run_bias     >   50.0f) { run_bias     =   50.0f; }
         if(run_errfilt  <    0.0f) { run_errfilt  =    0.0f; }
         if(run_errfilt  >    0.9f) { run_errfilt  =    0.9f; }
-        if(run_prospect <    0.0f) { run_prospect =    0.0f; }
-        if(run_prospect >  110.0f) { run_prospect =  110.0f; }
-        if(run_win      <    8.0f) { run_win      =    8.0f; }   // W1：窗口行数 8~40
-        if(run_win      >   40.0f) { run_win      =   40.0f; }
+        if(run_w_far    <    0.0f) { run_w_far    =    0.0f; }   // R1/R2/R3：三块权重 0~5
+        if(run_w_far    > ZONE_W_MAX) { run_w_far = ZONE_W_MAX; }
+        if(run_w_mid    <    0.0f) { run_w_mid    =    0.0f; }
+        if(run_w_mid    > ZONE_W_MAX) { run_w_mid = ZONE_W_MAX; }
+        if(run_w_near   <    0.0f) { run_w_near   =    0.0f; }
+        if(run_w_near   > ZONE_W_MAX) { run_w_near = ZONE_W_MAX; }
         if(run_err_bias <  -50.0f) { run_err_bias =  -50.0f; }   // C1：Err 偏置（±50 像素够用）
         if(run_err_bias >   50.0f) { run_err_bias =   50.0f; }
         if(run_switch   <    0.5f) { run_switch   =    0.0f; }
