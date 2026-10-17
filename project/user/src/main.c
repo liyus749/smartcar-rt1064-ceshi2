@@ -178,9 +178,23 @@
 // 【边线跟踪】参数（八邻域思路：每一行只在上一行边线附近找）
 //-------------------------------------------------------------------------------------------------------------------
 #define EDGE_WIN            (10)        // 每行搜索窗口：上一行边线 ±10 像素
+#define EDGE_WIN_WIDE       (24)        // 找不到时再用这个更宽的窗口（远处透视压缩，边线走得快）
 #define EDGE_MIN_W          (15)        // 赛道最窄宽度（像素）
 #define EDGE_MAX_W          (180)       // 赛道最宽宽度（像素）
 #define EDGE_LOST_MAX       (15)        // 连续丢这么多行，认为赛道到头了，停止跟踪
+
+//-------------------------------------------------------------------------------------------------------------------
+// 【图像滤波】3x3 邻域计数（形态学）—— 参考《八邻域_v2.0》的 image_filter()
+//
+//   · 中心是黑、但周围有 6 个以上是白 -> 填成白（去掉赛道里的小黑洞）
+//   · 中心是白、但周围只有 2 个以下是白 -> 改成黑（去掉孤立的白噪点）
+//
+//   为什么阈值用 6/2（参考里是 5/2）：5 会把"1 像素宽的黑线"也吃掉；6 只吃孤立单点，更保守。
+//   如果加了滤波之后黑线变细/断裂，把 IMG_FLT_MAX_WHITE 改成 7，或者把 USE_IMG_FILTER 设 0 关掉。
+//-------------------------------------------------------------------------------------------------------------------
+#define USE_IMG_FILTER      (1)
+#define IMG_FLT_MAX_WHITE   (6)         // 邻居里 >=6 个白 -> 填白
+#define IMG_FLT_MIN_WHITE   (2)         // 邻居里 <=2 个白 -> 改黑
 
 #define ERR_D_LIMIT         (20.0f)     // D 项用的"偏差变化量"限幅（像素/帧），防止某一帧抖动把舵机甩飞
 
@@ -686,6 +700,67 @@ static void Threshold_And_Binarize(void)
 
 
 //===================================================================================================================
+//  六点五五、图像滤波 + 加黑边（参考《八邻域_v2.0》）
+//
+//   1) 滤波：3x3 邻域计数，去掉孤立噪点、填掉赛道里的小洞
+//   2) 黑边：把二值图最外圈 2 像素刷黑，保证找边线时"外面一定是黑的"，
+//            搜索永远不会跑出图像边界（最下面一行不动，因为它是起始种子）
+//===================================================================================================================
+static void Image_Filter(void)
+{
+    uint16 row;
+    uint16 col;
+    uint16 cnt;
+
+    for(row = 1; row < MT9V03X_H - 1; row++)
+    {
+        for(col = 1; col < MT9V03X_W - 1; col++)
+        {
+            cnt = 0;
+
+            if(IMG_WHITE == image_two_value[row-1][col-1]) { cnt++; }
+            if(IMG_WHITE == image_two_value[row-1][col  ]) { cnt++; }
+            if(IMG_WHITE == image_two_value[row-1][col+1]) { cnt++; }
+            if(IMG_WHITE == image_two_value[row  ][col-1]) { cnt++; }
+            if(IMG_WHITE == image_two_value[row  ][col+1]) { cnt++; }
+            if(IMG_WHITE == image_two_value[row+1][col-1]) { cnt++; }
+            if(IMG_WHITE == image_two_value[row+1][col  ]) { cnt++; }
+            if(IMG_WHITE == image_two_value[row+1][col+1]) { cnt++; }
+
+            if((cnt >= IMG_FLT_MAX_WHITE) && (IMG_BLACK == image_two_value[row][col]))
+            {
+                image_two_value[row][col] = IMG_WHITE;      /* 小黑洞 -> 白 */
+            }
+            else if((cnt <= IMG_FLT_MIN_WHITE) && (IMG_WHITE == image_two_value[row][col]))
+            {
+                image_two_value[row][col] = IMG_BLACK;      /* 孤立白点 -> 黑 */
+            }
+        }
+    }
+}
+
+static void Image_DrawBlackBorder(void)
+{
+    uint16 row;
+    uint16 col;
+
+    for(row = 0; row < MT9V03X_H; row++)
+    {
+        image_two_value[row][0]           = IMG_BLACK;
+        image_two_value[row][1]           = IMG_BLACK;
+        image_two_value[row][MT9V03X_W-1] = IMG_BLACK;
+        image_two_value[row][MT9V03X_W-2] = IMG_BLACK;
+    }
+
+    for(col = 0; col < MT9V03X_W; col++)
+    {
+        image_two_value[0][col] = IMG_BLACK;
+        image_two_value[1][col] = IMG_BLACK;
+    }
+}
+
+
+//===================================================================================================================
 //  六点六、边线跟踪（八邻域思路）—— 从车头前方那一行出发，逐行往上"跟着走"
 //
 //   学长原来的做法：每一行都从"最长白列"那一列往两边扫到画面边缘。
@@ -720,7 +795,7 @@ static void Track_Lines(void)
 
     for(c = 1; c < MT9V03X_W - 1; c++)
     {
-        if(IMG_WHITE == image_two_value[MT9V03X_H - 1][c])
+        if(IMG_WHITE == image_two_value[MT9V03X_H - 2][c])      /* 用倒数第 2 行做种子（最底行容易被车头/阴影干扰）*/
         {
             if(run_start < 0) { run_start = c; }
         }
@@ -760,15 +835,15 @@ static void Track_Lines(void)
     l = best_l;
     r = best_r;
 
-    Left_Line[MT9V03X_H - 1]       = l;
-    Right_Line[MT9V03X_H - 1]      = r;
-    Left_Lost_Flag[MT9V03X_H - 1]  = 0;
-    Right_Lost_Flag[MT9V03X_H - 1] = 0;
+    Left_Line[MT9V03X_H - 2]       = l;
+    Right_Line[MT9V03X_H - 2]      = r;
+    Left_Lost_Flag[MT9V03X_H - 2]  = 0;
+    Right_Lost_Flag[MT9V03X_H - 2] = 0;
 
     /* ---------- 2. 逐行往上，只在上一行附近找 ---------- */
     lost = 0;
 
-    for(row = MT9V03X_H - 2; row >= 0; row--)
+    for(row = MT9V03X_H - 3; row >= 0; row--)
     {
         found = 0;
 
@@ -786,6 +861,23 @@ static void Track_Lines(void)
             }
         }
 
+        /* 窄窗口没找到：远处透视压缩，边线一行可能走好几像素，用宽窗口再试一次 */
+        if(0 == (found & 1))
+        {
+            for(c = l - EDGE_WIN_WIDE; c <= l + EDGE_WIN_WIDE; c++)
+            {
+                if((c <= 0) || (c >= MT9V03X_W - 1)) { continue; }
+
+                if((IMG_WHITE == image_two_value[row][c]) &&
+                   (IMG_BLACK == image_two_value[row][c - 1]))
+                {
+                    l = c;
+                    found |= 1;
+                    break;
+                }
+            }
+        }
+
         /* 右边界：窗口内从右往左，找"白 -> 黑"的那个白像素 */
         for(c = r + EDGE_WIN; c >= r - EDGE_WIN; c--)
         {
@@ -797,6 +889,22 @@ static void Track_Lines(void)
                 r = c;
                 found |= 2;
                 break;
+            }
+        }
+
+        if(0 == (found & 2))
+        {
+            for(c = r + EDGE_WIN_WIDE; c >= r - EDGE_WIN_WIDE; c--)
+            {
+                if((c <= 0) || (c >= MT9V03X_W - 1)) { continue; }
+
+                if((IMG_WHITE == image_two_value[row][c]) &&
+                   (IMG_BLACK == image_two_value[row][c + 1]))
+                {
+                    r = c;
+                    found |= 2;
+                    break;
+                }
             }
         }
 
@@ -828,6 +936,12 @@ static void Frame_Process(void)
     /* ---------- 1. 算阈值 + 二值化（分带大津法，详见上面 Threshold_And_Binarize）----------
        每 30 行一段、各算各的大津法、各自做时间平滑，再统一加 T1 偏置。 */
     Threshold_And_Binarize();
+
+    /* ---------- 1.5 图像滤波 + 加黑边（去掉噪点、保证搜索不出界）---------- */
+#if USE_IMG_FILTER
+    Image_Filter();
+#endif
+    Image_DrawBlackBorder();
 
     /* ---------- 2. 最长白列巡线：找左右边界 ---------- */
     Longest_White_Column();
