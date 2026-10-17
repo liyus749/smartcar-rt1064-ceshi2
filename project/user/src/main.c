@@ -83,7 +83,7 @@
 
 
 //===================================================================================================================
-//  一、可调参数（改这里就行）—— 标 ★ 的可以在 VOFA+ 里在线改，不用重新烧录
+//  一、可调参数（改这里就行）—— 标 ★ 的可以在 VOFA+ 里在线改
 //===================================================================================================================
 
 #define CAM_EXPOSURE        (512)       // 摄像头曝光：画面发白/反光就调小(400/350)，远处太暗就调大(600+)
@@ -101,6 +101,23 @@
 
 #define ERR_FILTER          (0.35f)     // ★F1  Err 低通滤波强度：0 = 不滤波，0.3~0.5 低速好用
 #define TH_SMOOTH_K         (0.35f)     // 大津法阈值的平滑强度（固定值，不用在线调）
+
+//-------------------------------------------------------------------------------------------------------------------
+// 【阈值】分带大津法 —— 解决"有些地方背景被误识别成赛道"
+//
+//   为什么要分带：大津法（全局）假设"整幅图里只有背景和赛道两种东西"。
+//     但你的画面上部一大片是背景（视野外），它会主导直方图，把阈值算偏；
+//     而且远处暗、近处亮，一个大津法阈值根本照顾不过来。
+//
+//   现在的做法：把 120 行切成 4 段（每段 30 行），每段自己算一次大津法、自己做平滑，
+//     再统一加 T1 偏置。这样"远处暗"由远处的段自己适应，"上面的背景"也不会污染下面的段。
+//     代价：几乎没有（统计的像素总数不变，只是分成 4 个直方图）。
+//
+//   USE_BAND_OTSU = 1 -> 分带大津法（★ 现在用这个）
+//   USE_BAND_OTSU = 0 -> 回到学长的全局大津法（想对比效果时用）
+//-------------------------------------------------------------------------------------------------------------------
+#define USE_BAND_OTSU       (1)
+#define OTSU_BANDS          (4)         // 分几段（120 行 / 4 = 每段 30 行）
 
 #define PROSPECT_ROW        (38)        // ★L1  前瞻起始行（行号越小 = 看得越远，0 = 最远，119 = 最近）
 #define PROSPECT_WIN        (21)        // 前瞻窗口高度（行数），和算法文档一致，不用改
@@ -170,8 +187,12 @@ static float          err_last    = 0.0f;                   // 上一拍的偏�
 static float          err_use_prev = 0.0f;                  // 上一帧滤波后的偏差（算帧间变化量用）
 static uint8          run_was_on  = 0;                      // 上一拍电机开关的状态（用来抓"刚发车"那一拍）
 
-/* ---- 压"偏差抖动"用的三个状态 ---- */
-static float          th_smooth    = 0.0f;                  // 平滑后的大津法阈值
+/* ---- 阈值：每一段一个"平滑后的阈值" ---- */
+static float          th_smooth[OTSU_BANDS];                // 每个分段平滑后的阈值
+static uint8          th_band[OTSU_BANDS];                  // 每个分段最终用的阈值（平滑值 + T1 偏置）
+static uint32         otsu_hist[256];                       // 大津法用的灰度直方图（放全局，省栈）
+
+/* ---- 压"偏差抖动"用的状态 ---- */
 static float          err_filt_val = 0.0f;                  // 滤波后的偏差（内部）
 static uint8          err_filt_init = 0;                    // 第一次拿到有效 Err 时直接赋值，别慢慢爬
 
@@ -401,33 +422,161 @@ void pit_handler0(void)
 
 
 //===================================================================================================================
+//  六点五、阈值与二值化（分带大津法）
+//===================================================================================================================
+
+//-------------------------------------------------------------------------------------------------------------------
+// 函数简介     对图像的某一段行做一次大津法，返回阈值
+// 参数说明     row_begin / row_end   要统计的行范围（含两端）
+// 返回参数     uint8                 这一段的阈值
+// 备注信息     算法和大津法标准做法一样：遍历所有可能的阈值，找"类间方差最大"的那个。
+//              差别只是统计范围限定在指定的行里（这样各段互不干扰）。
+//-------------------------------------------------------------------------------------------------------------------
+static uint8 Otsu_Rows(uint8 row_begin, uint8 row_end)
+{
+    uint16 i;
+    uint16 j;
+    uint32 amount        = 0;
+    uint32 pix_back      = 0;
+    uint32 integral      = 0;
+    uint32 integral_back = 0;
+    int32  pix_fore;
+    int32  integral_fore;
+    float  omega_back;
+    float  omega_fore;
+    float  micro_back;
+    float  micro_fore;
+    float  sigma;
+    float  sigma_max = -1.0f;
+    uint8  th        = 0;
+    uint8  min_v;
+    uint8  max_v;
+
+    for(j = 0; j < 256; j++) { otsu_hist[j] = 0; }
+
+    for(i = row_begin; i <= row_end; i++)
+    {
+        for(j = 0; j < MT9V03X_W; j++)
+        {
+            otsu_hist[mt9v03x_image[i][j]]++;
+        }
+    }
+
+    for(min_v = 0;    (min_v < 255) && (0 == otsu_hist[min_v]); min_v++) { }
+    for(max_v = 255;  (max_v > min_v) && (0 == otsu_hist[max_v]); max_v--) { }
+
+    if(max_v <= (uint8)(min_v + 1)) { return max_v; }   /* 这一段的灰度几乎只有一两种 */
+
+    for(j = min_v; j <= max_v; j++)
+    {
+        amount   += otsu_hist[j];
+        integral += otsu_hist[j] * j;
+    }
+
+    for(j = min_v; j < max_v; j++)
+    {
+        pix_back += otsu_hist[j];
+        if(0 == pix_back) { continue; }
+
+        pix_fore = (int32)amount - (int32)pix_back;
+        if(pix_fore <= 0) { break; }
+
+        integral_back += otsu_hist[j] * j;
+        integral_fore  = (int32)integral - (int32)integral_back;
+
+        omega_back = (float)pix_back / (float)amount;
+        omega_fore = (float)pix_fore / (float)amount;
+        micro_back = (float)integral_back / (float)pix_back;
+        micro_fore = (float)integral_fore / (float)pix_fore;
+
+        sigma = omega_back * omega_fore * (micro_back - micro_fore) * (micro_back - micro_fore);
+        if(sigma > sigma_max)
+        {
+            sigma_max = sigma;
+            th        = (uint8)j;
+        }
+    }
+
+    return th;
+}
+
+//-------------------------------------------------------------------------------------------------------------------
+// 函数简介     算阈值 + 二值化（一次搞定）
+// 备注信息     分带模式下：每段算自己的大津法 -> 时间上平滑 -> 加 T1 偏置 -> 按行用对应段的阈值二值化。
+//              结果写进 image_two_value[][]:  IMG_WHITE = 赛道，IMG_BLACK = 背景/黑线
+//-------------------------------------------------------------------------------------------------------------------
+static void Threshold_And_Binarize(void)
+{
+    uint16 row;
+    uint16 col;
+    uint8  b;
+    uint8  row_begin;
+    uint8  row_end;
+    int    th;
+
+#if USE_BAND_OTSU
+    for(b = 0; b < OTSU_BANDS; b++)
+    {
+        row_begin = (uint8)(b * (MT9V03X_H / OTSU_BANDS));
+        row_end   = (uint8)(row_begin + (MT9V03X_H / OTSU_BANDS) - 1);
+
+        {
+            float otsu = (float)Otsu_Rows(row_begin, row_end);
+
+            if(th_smooth[b] < 1.0f)
+            {
+                th_smooth[b] = otsu;                        /* 第一帧直接赋值，别慢慢爬 */
+            }
+            th_smooth[b] += TH_SMOOTH_K * (otsu - th_smooth[b]);
+
+            th = (int)th_smooth[b] + (int)run_bias;         /* ★ T1 偏置照样起作用 */
+            if(th > 255) { th = 255; }
+            if(th < 1)   { th = 1;   }
+            th_band[b] = (uint8)th;
+        }
+    }
+
+    /* 按行用"它所在那一段"的阈值二值化 */
+    for(row = 0; row < MT9V03X_H; row++)
+    {
+        th = th_band[row / (MT9V03X_H / OTSU_BANDS)];
+
+        for(col = 0; col < MT9V03X_W; col++)
+        {
+            image_two_value[row][col] = (mt9v03x_image[row][col] >= th) ? IMG_WHITE : IMG_BLACK;
+        }
+    }
+#else
+    /* 对比用：学长的全局大津法 */
+    {
+        float otsu = (float)Camera_GetOSTU(mt9v03x_image);
+
+        if(th_smooth[0] < 1.0f)
+        {
+            th_smooth[0] = otsu;
+        }
+        th_smooth[0] += TH_SMOOTH_K * (otsu - th_smooth[0]);
+
+        th = (int)th_smooth[0] + (int)run_bias;
+        if(th > 255) { th = 255; }
+        if(th < 1)   { th = 1;   }
+    }
+    Image_Binarization(th);
+#endif
+}
+
+
+//===================================================================================================================
 //  七、一帧图像处理（摄像头出一帧就调一次）
-//     流程：阈值 -> 二值化 -> 巡线找边界 -> 环岛识别 -> 算前瞻偏差 -> 滤波 -> 屏幕 -> 波形
+//     流程：阈值+二值化 -> 巡线找边界 -> 环岛识别 -> 算前瞻偏差 -> 滤波 -> 屏幕 -> 波形
 //===================================================================================================================
 static void Frame_Process(void)
 {
     int i;
-    int threshold;
 
-    /* ---------- 1. 大津法 -> 阈值平滑 -> 加偏置 ----------
-       为什么要平滑：大津法每一帧算出来的阈值会差 1~2 个数，阈值一跳，黑线边沿的位置
-       就跟着跳 1 个像素，Err 于是跟着抖。让它慢慢跟着变（低通），边线就稳多了。 */
-    {
-        float otsu = (float)Camera_GetOSTU(mt9v03x_image);
-
-        if(th_smooth < 1.0f)
-        {
-            th_smooth = otsu;                           /* 第一帧：直接赋值，别慢慢爬 */
-        }
-        th_smooth += TH_SMOOTH_K * (otsu - th_smooth);
-
-        threshold = (int)th_smooth + (int)run_bias;
-    }
-    if(threshold > 255) { threshold = 255; }
-    if(threshold < 1)   { threshold = 1;   }
-
-    /* ---------- 2. 二值化 ---------- */
-    Image_Binarization(threshold);
+    /* ---------- 1. 算阈值 + 二值化（分带大津法，详见上面 Threshold_And_Binarize）----------
+       每 30 行一段、各算各的大津法、各自做时间平滑，再统一加 T1 偏置。 */
+    Threshold_And_Binarize();
 
     /* ---------- 3. 最长白列巡线：找左右边界 ---------- */
     Longest_White_Column();
