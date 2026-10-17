@@ -120,7 +120,7 @@ void Screen_ShowStatus(float err, int state, int duty)
     ips200_show_string(0,  SCR_TXT_Y + 16,  "Isl ");
     ips200_show_int   (40, SCR_TXT_Y + 16,  state, 2);
 
-    ips200_show_string(0,  SCR_TXT_Y + 32,  "Duty");
+    ips200_show_string(0,  SCR_TXT_Y + 32,  "Spd ");    /* 目标速度（编码器计数/10ms）*/
     ips200_show_int   (40, SCR_TXT_Y + 32,  duty, 4);
 }
 

@@ -29,7 +29,7 @@
 *      2 = 舵机实际打角    Servo_GetAngle()
 *      3 = 左轮转速        编码器
 *      4 = 右轮转速        编码器
-*      5 = 速度设定(V1)
+*      5 = 目标速度(V1)   ★ 单位是"编码器计数 / 10ms"，不是占空比
 *      6 = 视野长度        突然变小 = 看不到路了
 *      7 = 左侧丢线行数
 *      8 = 右侧丢线行数
@@ -49,7 +49,9 @@
 *      L1=%f!  -> 前瞻起始行        0 ~ 110（越小 = 看得越远）
 *      W1=%f!  -> 前瞻窗口行数      8 ~ 40（越大 = 越平滑、重心越靠近脚下）
 *      C1=%f!  -> Err 偏置          -50 ~ 50（把直道零点归零：显示 -10 就把 C1 设成 -10，即 C1 = 你看到的 Err）
-*      V1=%f!  -> 电机速度          0 ~ 4000
+*      V1=%f!  -> 目标速度          0 ~ 4000（编码器计数/10ms）
+*      U1=%f!  -> 速度环 Kp         0 ~ 10
+*      I1=%f!  -> 速度环 Ki         0 ~ 5
 *      S1=%f!  -> 电机开关          0 = 停，1 = 跑
 *
 * ================================ 接线（和主板丝印一致）================================
@@ -90,7 +92,17 @@
 
 #define CAM_EXPOSURE        (512)       // 摄像头曝光：画面发白/反光就调小(400/350)，远处太暗就调大(600+)
 
-#define RUN_DUTY            (1000)      // ★V1  电机速度【上电默认】：1000 = 占空比 10%
+//-------------------------------------------------------------------------------------------------------------------
+// ★★ 注意：电机现在是【编码器速度闭环】，V1 的含义变了！★★
+//    V1 = 【目标速度】，单位是"编码器计数 / 10ms"（不是占空比了）
+//      怎么看该填多少：先把车架起来跑一下，看波形第 3/4 条（左右轮转速）稳定在多少，
+//      那个数就是目标速度的参考值（比如 30 就是每 10ms 走 30 个编码器计数）。
+//    U1 = 速度环 Kp（比例）     I1 = 速度环 Ki（积分）
+//-------------------------------------------------------------------------------------------------------------------
+#define RUN_SPEED           (30)        // ★V1  目标速度【上电默认】（编码器计数 / 10ms）
+
+#define SPEED_KP_DEFAULT    (0.8f)      // ★U1  速度环 Kp（0 = 关掉比例）
+#define SPEED_KI_DEFAULT    (0.4f)      // ★I1  速度环 Ki（太小到不了目标，太大来回震）
 #define RAMP_MS             (2000)      // 起步软启动：2 秒慢慢加速，不会一下冲出去
 #define RUN_AUTO_START      (1)         // 1 = 上电就自动跑（★现在用这个）；0 = 上电停着，等你在 VOFA 里按 S1
 
@@ -168,7 +180,9 @@ extern volatile int   Island_State;             // 0 = 没进环岛；1~5 = 环�
 //  三、全局状态
 //===================================================================================================================
 
-static volatile float run_duty    = (float)RUN_DUTY;        // V1：电机速度设定值
+static volatile float run_speed    = (float)RUN_SPEED;       // V1：目标速度（编码器计数/10ms）
+static volatile float run_kp_spd   = SPEED_KP_DEFAULT;      // U1：速度环 Kp
+static volatile float run_ki_spd   = SPEED_KI_DEFAULT;      // I1：速度环 Ki
 static volatile float run_p       = RUN_P;                  // P1：舵机 P
 static volatile float run_d       = RUN_D;                  // D1：舵机 D
 static volatile float run_bias    = (float)RUN_OSTU_BIAS;   // T1：阈值偏置（可负）
@@ -183,7 +197,15 @@ static const    float run_ramp    = (float)RAMP_MS;         // 起步软启动�
 
 static volatile int16 enc_l       = 0;                      // 左轮转速（每 10ms 的编码器计数）
 static volatile int16 enc_r       = 0;                      // 右轮转速
+static volatile int   spd_target  = 0;                      // 这一拍的目标速度（左右轮一样）
+static volatile int   duty_l      = 0;                      // 左轮实际输出的占空比
+static volatile int   duty_r      = 0;                      // 右轮实际输出的占空比
+static float          spd_e_last_l = 0.0f;                  // 左轮上一拍的速度误差（增量式 PI 用）
+static float          spd_e_last_r = 0.0f;                  // 右轮上一拍的速度误差
+static float          spd_out_l    = 0.0f;                  // 左轮 PI 累加出来的占空比
+static float          spd_out_r    = 0.0f;                  // 右轮 PI 累加出来的占空比
 static volatile int   dbg_duty    = 0;                      // 中断里实际输出的占空比（波形第 10 条 / 屏幕 Out）
+static uint16         hb_cnt      = 0;                      // 心跳灯计数（25 x 20ms = 500ms）
 static volatile int   dbg_prospect = PROSPECT_ROW;          // 这一帧实际用的前瞻起始行（波形第 15 条）
 static volatile int   dbg_win      = PROSPECT_WIN;           // 这一帧实际用的窗口行数
 static volatile float err_use     = 0.0f;                   // 真正送给舵机 PD 的偏差（= 滤波后的 Err）
@@ -385,11 +407,101 @@ static uint8 Err_Prospect(float *err_out)
 
 
 //===================================================================================================================
+//  五点五、速度环（编码器闭环）—— 每 10ms 调一次
+//
+//   思路：目标速度（V1）和实测速度（编码器计数/10ms）相减得到误差，
+//        用【增量式 PI】一点一点调整占空比，直到实测速度追上目标。
+//
+//   为什么左右轮各算各的：两个电机的摩擦、驱动、轮径都不一样，
+//   同一占空比下转速会差（你之前发现的"右轮快、左轮慢"）。各算各的 PI，
+//   跑起来会自动给慢的那一边多加一点占空比，两个轮子就同步了。
+//
+//   为什么用【增量式】：输出是"在上一拍的基础上加多少"，
+//   对输出限幅就等于同时限制了积分累积，不会积分饱和之后猛冲。
+//
+//   U1(Kp)：误差"变大/变小"时多给的那一点  -> 响应快、跟得紧
+//   I1(Ki)：只要还有误差就一直加一点        -> 负责把误差最终消掉
+//===================================================================================================================
+static void Speed_Control(void)
+{
+    int   target;
+    float e_l;
+    float e_r;
+    float out_l;
+    float out_r;
+
+    isr_ms += 10;                                       /* 软启动计时（10ms 一步） */
+
+    /* ---------- 1. 目标速度 ---------- */
+    if((run_enable > 0.0f) && (run_switch > 0.5f))
+    {
+        target = (int)run_speed;                        /* V1：目标速度（编码器计数/10ms） */
+
+        /* 环岛里自动降速 */
+#if USE_ISLAND
+        if(Island_State != 0)
+        {
+            target = (int)((float)target * ISLAND_SLOW_RATIO);
+        }
+#endif
+
+        /* 起步软启动：2 秒内目标速度从 0 线性加到 run_speed */
+        if(isr_ms < (uint32)run_ramp)
+        {
+            target = (int)((float)target * (float)isr_ms / run_ramp);
+        }
+    }
+    else
+    {
+        /* 开关关着 = 立刻停，并把 PI 的状态全部清零（下次启动重新来） */
+        spd_target   = 0;
+        duty_l       = 0;
+        duty_r       = 0;
+        dbg_duty     = 0;
+        spd_e_last_l = 0.0f;
+        spd_e_last_r = 0.0f;
+        spd_out_l    = 0.0f;
+        spd_out_r    = 0.0f;
+        isr_ms       = 0;
+        Motor_Stop();
+        return;
+    }
+
+    spd_target = target;
+
+    /* ---------- 2. 增量式 PI（左右各一套）---------- */
+    e_l = (float)target - (float)enc_l;
+    e_r = (float)target - (float)enc_r;
+
+    out_l = spd_out_l + run_kp_spd * (e_l - spd_e_last_l) + run_ki_spd * e_l;
+    out_r = spd_out_r + run_kp_spd * (e_r - spd_e_last_r) + run_ki_spd * e_r;
+
+    spd_e_last_l = e_l;
+    spd_e_last_r = e_r;
+
+    /* ---------- 3. 限幅（= 同时防积分饱和）---------- */
+    if(out_l >  (float)MOTOR_DUTY_MAX) { out_l =  (float)MOTOR_DUTY_MAX; }
+    if(out_l < -(float)MOTOR_DUTY_MAX) { out_l = -(float)MOTOR_DUTY_MAX; }
+    if(out_r >  (float)MOTOR_DUTY_MAX) { out_r =  (float)MOTOR_DUTY_MAX; }
+    if(out_r < -(float)MOTOR_DUTY_MAX) { out_r = -(float)MOTOR_DUTY_MAX; }
+
+    spd_out_l = out_l;
+    spd_out_r = out_r;
+
+    duty_l   = (int)out_l;
+    duty_r   = (int)out_r;
+    dbg_duty = (duty_l + duty_r) >> 1;                  /* 屏幕 Out / 波形第 10 条：左右平均占空比 */
+
+    Motor_Set(duty_l, duty_r);                          /* ★ 左右轮分别输出 */
+}
+
+
+//===================================================================================================================
 //  六、定时中断（isr.c 会调用 pit_handler0 / pit_handler1，函数名不能改）
 //===================================================================================================================
 
 //-------------------------------------------------------------------------------------------------------------------
-// 10ms 中断：读陀螺仪 + 读编码器
+// 10ms 中断：读陀螺仪 + 读编码器 + 速度环
 //-------------------------------------------------------------------------------------------------------------------
 void pit_handler1(void)
 {
@@ -406,38 +518,21 @@ void pit_handler1(void)
     encoder_clear_count(QTIMER1_ENCODER1);
     enc_r = (int16)( (int32)encoder_get_count(QTIMER1_ENCODER2));   // 右轮
     encoder_clear_count(QTIMER1_ENCODER2);
+
+    Speed_Control();                                    /* ★ 速度闭环：每 10ms 调一次 */
 }
 
 //-------------------------------------------------------------------------------------------------------------------
-// 20ms 中断：电机输出 + 舵机 PD
+// 20ms 中断：舵机 PD（电机已经交给 10ms 中断里的速度环了）
 // 备注信息     放在中断里算，控制周期就不受图像处理、屏幕刷新的快慢影响
 //-------------------------------------------------------------------------------------------------------------------
 void pit_handler0(void)
 {
     if((run_enable > 0.0f) && (run_switch > 0.5f))      /* 开关打开着 = 跑 */
     {
-        int   duty = (int)run_duty;                     // 1000 -> 占空比 1000（10%）
         float use_err;
         float d;
         float u;
-
-        isr_ms += 20;                                   // 中断自己计时（不依赖别的地方）
-
-        /* 环岛里自动降速：进环以后速度按比例压下来，出环自动恢复 */
-#if USE_ISLAND
-        if(Island_State != 0)
-        {
-            duty = (int)((float)duty * ISLAND_SLOW_RATIO);
-        }
-#endif
-
-        /* 电机：软启动到 run_duty，然后一直保持（速度可以边跑边改） */
-        if(isr_ms < (uint32)run_ramp)
-        {
-            duty = (int)((float)duty * (float)isr_ms / run_ramp);
-        }
-        dbg_duty = duty;                                // 记录实际输出（波形第 10 条 / 屏幕 Out）
-        Motor_Set(duty, duty);
 
         /* 舵机 PD： u = P * 偏差 + D * (偏差 - 上一拍偏差)
            偏差来自图像（正 = 车偏了，负 = 车偏了另一边），Servo_Steer 内部会限幅 */
@@ -459,18 +554,16 @@ void pit_handler0(void)
         err_last = use_err;
         Servo_Steer((int)u);
 
-        /* 心跳灯：每 500ms 翻一下 B9 —— 灯在闪，就说明控制中断确实在跑 */
-        if(0 == (isr_ms % 500))
+        /* 心跳灯：每 500ms 翻一下 B9（25 x 20ms）—— 灯在闪，就说明控制中断确实在跑 */
+        if(++hb_cnt >= 25)
         {
+            hb_cnt = 0;
             gpio_toggle_level(B9);
         }
     }
     else                                                /* 开关关着 = 停 */
     {
-        isr_ms   = 0;                                   // 停下时清零，下次启动重新计时
-        dbg_duty = 0;                                   // 停的时候也要把"实际输出"清 0，
-                                                        // 不然屏幕上 Out 会留着上次的数字
-        Motor_Stop();
+        hb_cnt = 0;                                     /* 电机的停止由 10ms 的速度环负责 */
         Servo_Steer(0);
     }
 }
@@ -721,7 +814,7 @@ static void Frame_Process(void)
 #if USE_SCREEN
     /* ---------- 8. 屏幕：图像 + 三条边线 + 状态 ---------- */
     Screen_ShowFrame(mt9v03x_image[0], image_two_value[0], line_left, line_mid, line_right);
-    Screen_ShowStatus(Err, Island_State, (int)run_duty);
+    Screen_ShowStatus(Err, Island_State, (int)run_speed);       /* 屏幕第 3 行显示"目标速度" */
     Screen_ShowParam((int)run_switch, dbg_duty, Vofa_RxBytes, Vofa_CmdOk);
     /* ★ 把"前瞻窗口"画出来：两条黄色虚线之间，就是程序拿来算 Err 的那一段赛道。
           拖 L1 滑动条，黄线会上下移动 —— 往上 = 看得远，往下 = 看脚下。 */
@@ -736,7 +829,7 @@ static void Frame_Process(void)
         osc[1]  = (float)Servo_GetAngle();              /* 2  舵机实际打角 */
         osc[2]  = (float)enc_l;                         /* 3  左轮转速 */
         osc[3]  = (float)enc_r;                         /* 4  右轮转速 */
-        osc[4]  = run_duty;                             /* 5  速度设定值 */
+        osc[4]  = run_speed;                            /* 5  目标速度（编码器计数/10ms）*/
         osc[5]  = (float)Search_Stop_Line;              /* 6  视野长度 */
         osc[6]  = (float)Left_Lost_Time;                /* 7  左侧丢线行数 */
         osc[7]  = (float)Right_Lost_Time;               /* 8  右侧丢线行数 */
@@ -846,7 +939,7 @@ int main(void)
         /* 命令格式：【字母】【数字】=【数值】!
               P1 舵机P    D1 舵机D    T1 阈值偏置（可负）
               F1 Err滤波  L1 前瞻起始行  W1 前瞻窗口行数  C1 Err偏置
-              V1 电机速度  S1 电机开关（0 = 停，1 = 跑）
+              V1 目标速度  U1 速度环Kp  I1 速度环Ki  S1 电机开关（0 = 停，1 = 跑）
            ★ 每收到一次参数 B9 闪一下 —— 这是"参数到底有没有传进来"最直接的证据 */
         if(Vofa_ParamFlag['P'-'A'][1]) { Vofa_ParamFlag['P'-'A'][1] = 0; run_p       = Vofa_Param['P'-'A'][1]; gpio_toggle_level(B9); }
         if(Vofa_ParamFlag['D'-'A'][1]) { Vofa_ParamFlag['D'-'A'][1] = 0; run_d       = Vofa_Param['D'-'A'][1]; gpio_toggle_level(B9); }
@@ -855,12 +948,18 @@ int main(void)
         if(Vofa_ParamFlag['L'-'A'][1]) { Vofa_ParamFlag['L'-'A'][1] = 0; run_prospect= Vofa_Param['L'-'A'][1]; gpio_toggle_level(B9); }
         if(Vofa_ParamFlag['W'-'A'][1]) { Vofa_ParamFlag['W'-'A'][1] = 0; run_win     = Vofa_Param['W'-'A'][1]; gpio_toggle_level(B9); }
         if(Vofa_ParamFlag['C'-'A'][1]) { Vofa_ParamFlag['C'-'A'][1] = 0; run_err_bias= Vofa_Param['C'-'A'][1]; gpio_toggle_level(B9); }
-        if(Vofa_ParamFlag['V'-'A'][1]) { Vofa_ParamFlag['V'-'A'][1] = 0; run_duty    = Vofa_Param['V'-'A'][1]; gpio_toggle_level(B9); }
+        if(Vofa_ParamFlag['V'-'A'][1]) { Vofa_ParamFlag['V'-'A'][1] = 0; run_speed   = Vofa_Param['V'-'A'][1]; gpio_toggle_level(B9); }
+        if(Vofa_ParamFlag['U'-'A'][1]) { Vofa_ParamFlag['U'-'A'][1] = 0; run_kp_spd  = Vofa_Param['U'-'A'][1]; gpio_toggle_level(B9); }
+        if(Vofa_ParamFlag['I'-'A'][1]) { Vofa_ParamFlag['I'-'A'][1] = 0; run_ki_spd  = Vofa_Param['I'-'A'][1]; gpio_toggle_level(B9); }
         if(Vofa_ParamFlag['S'-'A'][1]) { Vofa_ParamFlag['S'-'A'][1] = 0; run_switch  = Vofa_Param['S'-'A'][1]; gpio_toggle_level(B9); }
 
         /* ---------- 安全限幅：防止滑动条拖过头把车弄失控 ---------- */
-        if(run_duty     <    0.0f) { run_duty     =    0.0f; }
-        if(run_duty     > 4000.0f) { run_duty     = 4000.0f; }
+        if(run_speed    <    0.0f) { run_speed    =    0.0f; }   // V1：目标速度（计数/10ms）
+        if(run_speed    > 4000.0f) { run_speed    = 4000.0f; }
+        if(run_kp_spd   <    0.0f) { run_kp_spd   =    0.0f; }   // U1：速度环 Kp
+        if(run_kp_spd   >   10.0f) { run_kp_spd   =   10.0f; }
+        if(run_ki_spd   <    0.0f) { run_ki_spd   =    0.0f; }   // I1：速度环 Ki
+        if(run_ki_spd   >    5.0f) { run_ki_spd   =    5.0f; }
         if(run_p        <    0.0f) { run_p        =    0.0f; }
         if(run_p        >   20.0f) { run_p        =   20.0f; }
         if(run_d        <    0.0f) { run_d        =    0.0f; }
