@@ -49,6 +49,7 @@
 *      R1=%f!  -> 远块权重          0 ~ 5（0 = 完全不看远处）
 *      R2=%f!  -> 中块权重          0 ~ 5
 *      R3=%f!  -> 近块权重          0 ~ 5（★默认 1 / 2 / 2）
+*      H1=%f!  -> 航向项权重        0 ~ 5（★默认 0.5；0 = 只看位置，不管赛道往哪边拐）
 *      C1=%f!  -> Err 偏置          -50 ~ 50（把直道零点归零：显示 -10 就把 C1 设成 -10，即 C1 = 你看到的 Err）
 *      V1=%f!  -> 电机占空比        0 ~ 4000（800 = 8%，★平时只调这一个）
 *      S1=%f!  -> 电机开关          0 = 停，1 = 跑
@@ -159,6 +160,28 @@
 #define ZONE_W_MAX          (5.0f)      // 单个权重上限
 #define ZONE_MIN_ROWS       (3)         // 一块里至少要有几行有效数据才算数
 
+//-------------------------------------------------------------------------------------------------------------------
+// 【航向项】偏差不能只看"位置"，还要看"赛道往哪边拐"
+//
+//   只看位置的问题：直道上车偏左 10px、和进弯时中线偏左 10px，位置偏差一样，但该打的角完全不同。
+//   航向项 = 远块偏差 − 近块偏差：它反映"赛道在往哪边弯"。
+//     右弯：远处中线更偏右 -> 远块偏差比近块更负 -> 差值 < 0 -> Err 更负 -> 提前往右打 ✓
+//     左弯：反过来 ✓
+//
+//   H1 = 0    -> 关掉航向项（回到纯位置加权）
+//   H1 越大   -> 入弯越早、越"看趋势"；太大容易切内道
+//-------------------------------------------------------------------------------------------------------------------
+#define ANG_W_DEFAULT       (0.5f)      // ★H1  航向项权重
+#define ANG_W_MAX           (5.0f)      // 上限
+
+//-------------------------------------------------------------------------------------------------------------------
+// 【边线跟踪】参数（八邻域思路：每一行只在上一行边线附近找）
+//-------------------------------------------------------------------------------------------------------------------
+#define EDGE_WIN            (10)        // 每行搜索窗口：上一行边线 ±10 像素
+#define EDGE_MIN_W          (15)        // 赛道最窄宽度（像素）
+#define EDGE_MAX_W          (180)       // 赛道最宽宽度（像素）
+#define EDGE_LOST_MAX       (15)        // 连续丢这么多行，认为赛道到头了，停止跟踪
+
 #define ERR_D_LIMIT         (20.0f)     // D 项用的"偏差变化量"限幅（像素/帧），防止某一帧抖动把舵机甩飞
 
 #define ERR_SPIKE_LIMIT     (15)        // 一行中线和"左右相邻两行平均"差超过这么多像素 -> 当坏行丢掉
@@ -200,6 +223,7 @@ static volatile float run_errfilt = (float)ERR_FILTER;      // F1：Err 低通�
 static volatile float run_w_far    = ZONE_FAR_DEFAULT;       // R1：远块权重
 static volatile float run_w_mid    = ZONE_MID_DEFAULT;       // R2：中块权重
 static volatile float run_w_near   = ZONE_NEAR_DEFAULT;      // R3：近块权重
+static volatile float run_ang_w    = ANG_W_DEFAULT;          // H1：航向项权重
 static volatile float run_err_bias = 0.0f;                   // C1：Err 偏置（把直道零点归零用）
 static volatile float run_switch  = (float)RUN_AUTO_START;  // S1：电机开关（0 = 停，1 = 跑）
 
@@ -323,6 +347,7 @@ static uint8 Err_Zone(float *err_out)
     float w[3];
     float total_e = 0.0f;
     float total_w = 0.0f;
+    float lateral;
 
     /* ---------- 1. 看得见赛道的那一段 ---------- */
     farthest = MT9V03X_H - Search_Stop_Line;
@@ -399,7 +424,19 @@ static uint8 Err_Zone(float *err_out)
 
     if(total_w < 0.001f) { return 0; }                  /* 三块都没用上：这帧不算 */
 
-    *err_out = (total_e / total_w) - run_err_bias;      /* C1：零点偏置 */
+    lateral = total_e / total_w;                        /* ① 位置项：加权后的横向偏差 */
+
+    /* ---------- 6. 航向项：远块偏差 − 近块偏差 ----------
+       右弯时远处中线更偏右 -> 远块偏差比近块更负 -> 差值为负 -> Err 更负 -> 提前往右打 */
+    if((cnt[0] >= ZONE_MIN_ROWS) && (cnt[2] >= ZONE_MIN_ROWS) && (run_ang_w > 0.001f))
+    {
+        float err_far  = sum[0] / (float)cnt[0];
+        float err_near = sum[2] / (float)cnt[2];
+
+        lateral += run_ang_w * (err_far - err_near);
+    }
+
+    *err_out = lateral - run_err_bias;                  /* C1：零点偏置 */
     return 1;
 }
 
@@ -649,6 +686,138 @@ static void Threshold_And_Binarize(void)
 
 
 //===================================================================================================================
+//  六点六、边线跟踪（八邻域思路）—— 从车头前方那一行出发，逐行往上"跟着走"
+//
+//   学长原来的做法：每一行都从"最长白列"那一列往两边扫到画面边缘。
+//     问题：弯道里那一列可能已经在赛道外面，扫出来的"边线"就跑到背景里去了
+//           —— 这就是"右边线经常飞走"的根源之一。
+//
+//   这里的做法：
+//     1. 在最底行找一段白色（赛道就在车头正下方），取它的左右端作为起点；
+//     2. 往上每走一行，只在【上一行边线 ±EDGE_WIN 像素】的窗口里找"黑->白"跳变；
+//     3. 找到了就更新，找不到就沿用上一行的值（保持连续），连续丢太多行就停止。
+//
+//   好处：边线物理上不可能突然跳十几像素到背景里，所以天然连续、不会被误匹配带飞。
+//   结果直接写回 Left_Line / Right_Line / 丢线标志，环岛识别和偏差计算都跟着受益。
+//===================================================================================================================
+static void Track_Lines(void)
+{
+    int row;
+    int c;
+    int l;
+    int r;
+    int run_start;
+    int run_w;
+    int best_l = 0;
+    int best_r = 0;
+    int best_w = 0;
+    int has_center_run = 0;
+    int lost;
+    int found;
+
+    /* ---------- 1. 底行的种子：优先取"包含画面中心"的那段白，否则取最宽的一段 ---------- */
+    run_start = -1;
+
+    for(c = 1; c < MT9V03X_W - 1; c++)
+    {
+        if(IMG_WHITE == image_two_value[MT9V03X_H - 1][c])
+        {
+            if(run_start < 0) { run_start = c; }
+        }
+        else
+        {
+            if(run_start >= 0)
+            {
+                run_w = c - run_start;
+
+                if((run_start <= (MT9V03X_W / 2)) && (c > (MT9V03X_W / 2)))
+                {
+                    best_l = run_start;
+                    best_r = c - 1;
+                    has_center_run = 1;
+                    break;
+                }
+
+                if(run_w > best_w)
+                {
+                    best_w = run_w;
+                    best_l = run_start;
+                    best_r = c - 1;
+                }
+                run_start = -1;
+            }
+        }
+    }
+
+    if(!has_center_run && (run_start >= 0))
+    {
+        run_w = (MT9V03X_W - 1) - run_start;
+        if(run_w > best_w) { best_w = run_w;  best_l = run_start;  best_r = MT9V03X_W - 2; }
+    }
+
+    if((best_r - best_l) < EDGE_MIN_W) { return; }          /* 底行没有可信的赛道白段 */
+
+    l = best_l;
+    r = best_r;
+
+    Left_Line[MT9V03X_H - 1]       = l;
+    Right_Line[MT9V03X_H - 1]      = r;
+    Left_Lost_Flag[MT9V03X_H - 1]  = 0;
+    Right_Lost_Flag[MT9V03X_H - 1] = 0;
+
+    /* ---------- 2. 逐行往上，只在上一行附近找 ---------- */
+    lost = 0;
+
+    for(row = MT9V03X_H - 2; row >= 0; row--)
+    {
+        found = 0;
+
+        /* 左边界：窗口内从左往右，找"黑 -> 白"的那个白像素 */
+        for(c = l - EDGE_WIN; c <= l + EDGE_WIN; c++)
+        {
+            if((c <= 0) || (c >= MT9V03X_W - 1)) { continue; }
+
+            if((IMG_WHITE == image_two_value[row][c]) &&
+               (IMG_BLACK == image_two_value[row][c - 1]))
+            {
+                l = c;
+                found |= 1;
+                break;
+            }
+        }
+
+        /* 右边界：窗口内从右往左，找"白 -> 黑"的那个白像素 */
+        for(c = r + EDGE_WIN; c >= r - EDGE_WIN; c--)
+        {
+            if((c <= 0) || (c >= MT9V03X_W - 1)) { continue; }
+
+            if((IMG_WHITE == image_two_value[row][c]) &&
+               (IMG_BLACK == image_two_value[row][c + 1]))
+            {
+                r = c;
+                found |= 2;
+                break;
+            }
+        }
+
+        if((3 == found) && ((r - l) >= EDGE_MIN_W) && ((r - l) <= EDGE_MAX_W))
+        {
+            Left_Line[row]       = l;
+            Right_Line[row]      = r;
+            Left_Lost_Flag[row]  = 0;
+            Right_Lost_Flag[row] = 0;
+            lost = 0;
+        }
+        else
+        {
+            lost++;
+            if(lost > EDGE_LOST_MAX) { break; }             /* 赛道到头了，上面不再改 */
+        }
+    }
+}
+
+
+//===================================================================================================================
 //  七、一帧图像处理（摄像头出一帧就调一次）
 //     流程：阈值+二值化 -> 巡线找边界 -> 环岛识别 -> 算分块偏差 -> 滤波 -> 屏幕 -> 波形
 //===================================================================================================================
@@ -662,6 +831,9 @@ static void Frame_Process(void)
 
     /* ---------- 2. 最长白列巡线：找左右边界 ---------- */
     Longest_White_Column();
+
+    /* ---------- 2.5 边线跟踪（八邻域）：用"跟着上一行走"的方式重写边线，去掉乱跳 ------- */
+    Track_Lines();
 
     /* ---------- 3. 环岛识别（学长的 8 状态机）----------
        它可能会调用 Left_Add_Line/Right_Add_Line 来"补线"，
@@ -871,7 +1043,7 @@ int main(void)
 
         /* 命令格式：【字母】【数字】=【数值】!
               P1 舵机P    D1 舵机D    T1 阈值偏置（可负）
-              F1 Err滤波  R1/R2/R3 远中近三块权重  C1 Err偏置
+              F1 Err滤波  R1/R2/R3 远中近三块权重  H1 航向项权重  C1 Err偏置
               V1 电机占空比
               S1 电机开关（0 = 停，1 = 跑）
            ★ 每收到一次参数 B9 闪一下 —— 这是"参数到底有没有传进来"最直接的证据 */
@@ -882,6 +1054,7 @@ int main(void)
         if(Vofa_ParamFlag['R'-'A'][1]) { Vofa_ParamFlag['R'-'A'][1] = 0; run_w_far   = Vofa_Param['R'-'A'][1]; gpio_toggle_level(B9); }
         if(Vofa_ParamFlag['R'-'A'][2]) { Vofa_ParamFlag['R'-'A'][2] = 0; run_w_mid   = Vofa_Param['R'-'A'][2]; gpio_toggle_level(B9); }
         if(Vofa_ParamFlag['R'-'A'][3]) { Vofa_ParamFlag['R'-'A'][3] = 0; run_w_near  = Vofa_Param['R'-'A'][3]; gpio_toggle_level(B9); }
+        if(Vofa_ParamFlag['H'-'A'][1]) { Vofa_ParamFlag['H'-'A'][1] = 0; run_ang_w   = Vofa_Param['H'-'A'][1]; gpio_toggle_level(B9); }
         if(Vofa_ParamFlag['C'-'A'][1]) { Vofa_ParamFlag['C'-'A'][1] = 0; run_err_bias= Vofa_Param['C'-'A'][1]; gpio_toggle_level(B9); }
         if(Vofa_ParamFlag['V'-'A'][1]) { Vofa_ParamFlag['V'-'A'][1] = 0; run_speed   = Vofa_Param['V'-'A'][1]; gpio_toggle_level(B9); }
         if(Vofa_ParamFlag['S'-'A'][1]) { Vofa_ParamFlag['S'-'A'][1] = 0; run_switch  = Vofa_Param['S'-'A'][1]; gpio_toggle_level(B9); }
@@ -904,6 +1077,8 @@ int main(void)
         if(run_w_mid    > ZONE_W_MAX) { run_w_mid = ZONE_W_MAX; }
         if(run_w_near   <    0.0f) { run_w_near   =    0.0f; }
         if(run_w_near   > ZONE_W_MAX) { run_w_near = ZONE_W_MAX; }
+        if(run_ang_w    <    0.0f) { run_ang_w    =    0.0f; }   // H1：航向项权重 0~5
+        if(run_ang_w    > ANG_W_MAX) { run_ang_w  = ANG_W_MAX; }
         if(run_err_bias <  -50.0f) { run_err_bias =  -50.0f; }   // C1：Err 偏置（±50 像素够用）
         if(run_err_bias >   50.0f) { run_err_bias =   50.0f; }
         if(run_switch   <    0.5f) { run_switch   =    0.0f; }
