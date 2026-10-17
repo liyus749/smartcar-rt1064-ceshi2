@@ -181,19 +181,29 @@ void Screen_ShowProspect(uint8 row_top, uint8 row_bottom)
 }
 
 //-------------------------------------------------------------------------------------------------------------------
-// 函数简介     显示速度环的三个关键数：目标 / 左轮实测 / 右轮实测
-// 备注信息     格式：  tgt 150   vL 148  vR 151
+// 函数简介     左右轮速度环状态（两行）
+// 备注信息     格式：  L tgt 150 v 148 d 1300
+//                     R tgt 150 v 151 d 1290
+//               tgt=目标  v=实测  d=输出占空比
 //-------------------------------------------------------------------------------------------------------------------
-void Screen_ShowSpeed(int target, int vl, int vr)
+static void Screen_ShowOneWheel(uint16 y, const char *tag, int tgt, int v, int d)
 {
-    ips200_show_string(0,   SCR_TXT_Y + 96, "tgt");
-    ips200_show_int   (32,  SCR_TXT_Y + 96, (int32)target, 5);
+    ips200_show_string(0,   y, tag);
 
-    ips200_show_string(80,  SCR_TXT_Y + 96, "vL");
-    ips200_show_int   (104, SCR_TXT_Y + 96, (int32)vl, 5);
+    ips200_show_string(16,  y, "tgt");
+    ips200_show_int   (40,  y, (int32)tgt, 4);
 
-    ips200_show_string(160, SCR_TXT_Y + 96, "vR");
-    ips200_show_int   (184, SCR_TXT_Y + 96, (int32)vr, 5);
+    ips200_show_string(80,  y, "v");
+    ips200_show_int   (96,  y, (int32)v, 4);
+
+    ips200_show_string(136, y, "d");
+    ips200_show_int   (152, y, (int32)d, 4);
+}
+
+void Screen_ShowSpeed(int tgt_l, int v_l, int d_l, int tgt_r, int v_r, int d_r)
+{
+    Screen_ShowOneWheel(SCR_TXT_Y +  96, "L", tgt_l, v_l, d_l);
+    Screen_ShowOneWheel(SCR_TXT_Y + 112, "R", tgt_r, v_r, d_r);
 }
 
 

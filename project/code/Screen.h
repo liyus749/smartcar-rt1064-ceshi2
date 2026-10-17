@@ -126,15 +126,17 @@ void Screen_ShowParam(int sw, int out_duty, uint32 rx_bytes, uint32 cmd_ok);
 void Screen_ShowProspect(uint8 row_top, uint8 row_bottom);
 
 //-------------------------------------------------------------------------------------------------------------------
-// 函数简介     显示"速度环三件套"：目标速度 / 实测左轮 / 实测右轮
-// 参数说明     target      目标速度（V1）
-// 参数说明     vl          左轮实测（编码器计数/10ms，带正负号）
-// 参数说明     vr          右轮实测（带正负号）
-// 使用示例     Screen_ShowSpeed((int)run_speed, enc_l, enc_r);
-// 备注信息     ★ 调试速度环就看这一行：目标 150 时，vl/vr 应该都往 150 收敛；
-//              如果 vl/vr 是负数，说明编码器方向反了（正反馈 -> 满速）
+// 函数简介     左右轮速度环状态（两行）
+// 参数说明     tgt_l / v_l / d_l   左轮：目标 / 实测 / 输出占空比
+// 参数说明     tgt_r / v_r / d_r   右轮：目标 / 实测 / 输出占空比
+// 使用示例     Screen_ShowSpeed(SpeedLoop_GetTargetL(), SpeedLoop_GetSpeedL(), SpeedLoop_GetDutyL(),
+//                               SpeedLoop_GetTargetR(), SpeedLoop_GetSpeedR(), SpeedLoop_GetDutyR());
+// 备注信息     屏幕显示成两行：
+//                L tgt 150 v 148 d 1300
+//                R tgt 150 v 151 d 1290
+//              左边测左轮、右边测右轮，哪一侧有问题一眼就能看出来
 //-------------------------------------------------------------------------------------------------------------------
-void Screen_ShowSpeed(int target, int vl, int vr);
+void Screen_ShowSpeed(int tgt_l, int v_l, int d_l, int tgt_r, int v_r, int d_r);
 
 //-------------------------------------------------------------------------------------------------------------------
 // 函数简介     在指定位置显示一行字符串（英文/数字）

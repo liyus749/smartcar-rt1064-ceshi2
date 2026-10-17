@@ -17,9 +17,10 @@
 *   占空比   = 0 ~ 4000               （Motor.c 里 PWM 满量程 10000，所以 4000 = 40%）
 *
 * ================================ VOFA 怎么调 ================================
-*   V1 = SpeedLoop_SetTarget(值)      目标速度（0 ~ 600）
-*   U1 = SpeedLoop_SetGains(值, 当前Ki)   Kp（0 ~ 0.5，默认 0.15）
-*   I1 = SpeedLoop_SetGains(当前Kp, 值)   Ki（0 ~ 0.15，默认 0.05）
+*   V1 = SpeedLoop_SetTarget(值)          左右轮用同一个目标（正常跑车）
+*   A1/A2 = SpeedLoop_SetTargetLR(A1,A2)  左/右轮【各自】的目标（测试用）
+*   K1/K2/K3/K4 = SpeedLoop_SetGainsLR(K1,K2,K3,K4)
+*                左轮 Kp / 左轮 Ki / 右轮 Kp / 右轮 Ki
 *
 * ================================ 安全设计 ================================
 *   1) 反馈用 |实测速度|：编码器方向接反不会变成正反馈（不会"越跑越加油门"）
@@ -58,9 +59,23 @@ void  SpeedLoop_Reset(void);
 void  SpeedLoop_SetTarget(int target);
 
 //-------------------------------------------------------------------------------------------------------------------
+// 函数简介     左右轮分别设置目标速度（测试左右机械差异时用）
+// 参数说明     target_l / target_r   左 / 右轮目标（编码器计数/10ms），自动限幅
+// 备注信息     把某一侧设成 0，那一侧就不转，可以只测另一边
+//-------------------------------------------------------------------------------------------------------------------
+void  SpeedLoop_SetTargetLR(int target_l, int target_r);
+
+//-------------------------------------------------------------------------------------------------------------------
 // 函数简介     设置 PI 参数（Kp / Ki），自动限幅到安全范围
 //-------------------------------------------------------------------------------------------------------------------
 void  SpeedLoop_SetGains(float kp, float ki);
+
+//-------------------------------------------------------------------------------------------------------------------
+// 函数简介     左右轮分别设置 PI 参数（左右机械结构不同时，各调各的）
+// 参数说明     kp_l / ki_l   左轮 Kp / Ki
+// 参数说明     kp_r / ki_r   右轮 Kp / Ki
+//-------------------------------------------------------------------------------------------------------------------
+void  SpeedLoop_SetGainsLR(float kp_l, float ki_l, float kp_r, float ki_r);
 
 //-------------------------------------------------------------------------------------------------------------------
 // 函数简介     每 10ms 调一次：算 PI、输出 PWM
@@ -69,11 +84,17 @@ void  SpeedLoop_SetGains(float kp, float ki);
 void  SpeedLoop_Update(int enc_l, int enc_r);
 
 int   SpeedLoop_GetTarget(void);        // 当前目标速度
+int   SpeedLoop_GetTargetL(void);       // 左轮目标
+int   SpeedLoop_GetTargetR(void);       // 右轮目标
 int   SpeedLoop_GetSpeedL(void);        // 左轮实测（绝对值）
 int   SpeedLoop_GetSpeedR(void);        // 右轮实测（绝对值）
 int   SpeedLoop_GetDutyL(void);         // 左轮输出占空比
 int   SpeedLoop_GetDutyR(void);         // 右轮输出占空比
 float SpeedLoop_GetKp(void);
 float SpeedLoop_GetKi(void);
+float SpeedLoop_GetKpL(void);
+float SpeedLoop_GetKiL(void);
+float SpeedLoop_GetKpR(void);
+float SpeedLoop_GetKiR(void);
 
 #endif

@@ -49,10 +49,19 @@
 *      L1=%f!  -> 前瞻起始行        0 ~ 110（越小 = 看得越远）
 *      W1=%f!  -> 前瞻窗口行数      8 ~ 40（越大 = 越平滑、重心越靠近脚下）
 *      C1=%f!  -> Err 偏置          -50 ~ 50（把直道零点归零：显示 -10 就把 C1 设成 -10，即 C1 = 你看到的 Err）
-*      V1=%f!  -> 目标速度          0 ~ 600（编码器计数/10ms，★平时只调这一个）
-*      U1=%f!  -> 速度环 Kp         0 ~ 0.5（一般不用动，默认 0.15）
-*      I1=%f!  -> 速度环 Ki         0 ~ 0.15（一般不用动，默认 0.05）
+*      V1=%f!  -> 目标速度          0 ~ 600（左右轮用同一个目标，★正常跑车只用这个）
 *      S1=%f!  -> 电机开关          0 = 停，1 = 跑
+*
+*      —— 下面 4 条是"左右分测"用的（M1 = 0 时不起作用）——
+*      M1=%f!  -> 分测开关          0 = 正常（用 V1）  1 = 左右分开（用 A1/A2）
+*      A1=%f!  -> 左轮目标速度      0 ~ 600（设 0 = 左轮不转）
+*      A2=%f!  -> 右轮目标速度      0 ~ 600（设 0 = 右轮不转）
+*
+*      —— 下面 4 条是左右各自的 PI 参数 ——
+*      K1=%f!  -> 左轮 Kp           0 ~ 0.5（默认 0.15）
+*      K2=%f!  -> 左轮 Ki           0 ~ 0.15（默认 0.05）
+*      K3=%f!  -> 右轮 Kp           0 ~ 0.5（默认 0.15）
+*      K4=%f!  -> 右轮 Ki           0 ~ 0.15（默认 0.05）
 *
 * ================================ 接线（和主板丝印一致）================================
 *   舵机           -> 舵机接口 1              信号 C30
@@ -103,12 +112,22 @@
 //   你要做的：
 //     1. V1 = 想要的速度（0 ~ 460）。起步有 2 秒软启动。
 //     2. S1 = 1 开跑，= 0 立刻停。
-//     3. U1 / I1 一般不要动。
+//     3. K1~K4 一般不要动。
+//
+//   【左右分开测】（你的左右机械差异大，用这个）
+//     M1 = 1                 进入分测模式
+//     A1 = 左轮目标速度        A2 = 右轮目标速度
+//       · A2 设 0 -> 只转左轮；A1 设 0 -> 只转右轮
+//     K1/K2 = 左轮 Kp/Ki      K3/K4 = 右轮 Kp/Ki
+//     屏幕上会显示两行：
+//       L tgt 150 v 148 d 1300
+//       R tgt 150 v 151 d 1290
+//     （tgt = 目标，v = 实测，d = 输出占空比）
 //
 //   现象怎么调：
 //     速度上不去、屏幕 Out 贴 4000   -> V1 设太高（超过车能到的最高速度）-> V1 调小
-//     速度在目标上下摆               -> U1 减半（0.15 -> 0.08）
-//     追得太慢、要好几秒才到          -> I1 加一点（0.05 -> 0.10）
+//     速度在目标上下摆               -> 对应那侧的 Kp 减半（如 K1 0.15 -> 0.08）
+//     追得太慢、要好几秒才到          -> 对应那侧的 Ki 加一点（如 K2 0.05 -> 0.10）
 //     屏幕 vL/vR 明显比目标大          -> 编码器读数有问题，把 vL/vR 的数值告诉我
 //
 //   ★ 安全设计（不会倒车、不会满速乱冲）：
@@ -215,8 +234,13 @@ extern volatile int   Island_State;             // 0 = 没进环岛；1~5 = 环�
 //===================================================================================================================
 
 static volatile float run_speed    = (float)RUN_SPEED;       // V1：目标速度（编码器计数/10ms）
-static volatile float run_kp_spd   = SPEED_KP_DEFAULT;      // U1：速度环 Kp
-static volatile float run_ki_spd   = SPEED_KI_DEFAULT;      // I1：速度环 Ki
+static volatile float run_kp_l     = SPEED_KP_DEFAULT;      // K1：左轮 Kp
+static volatile float run_ki_l     = SPEED_KI_DEFAULT;      // K2：左轮 Ki
+static volatile float run_kp_r     = SPEED_KP_DEFAULT;      // K3：右轮 Kp
+static volatile float run_ki_r     = SPEED_KI_DEFAULT;      // K4：右轮 Ki
+static volatile float run_t_l      = (float)RUN_SPEED;      // A1：测试模式下左轮目标
+static volatile float run_t_r      = (float)RUN_SPEED;      // A2：测试模式下右轮目标
+static volatile float run_test_mode = 0.0f;                 // M1：0 = 正常(V1 同时给两边)  1 = 左右分开(A1/A2)
 static volatile float run_p       = RUN_P;                  // P1：舵机 P
 static volatile float run_d       = RUN_D;                  // D1：舵机 D
 static volatile float run_bias    = (float)RUN_OSTU_BIAS;   // T1：阈值偏置（可负）
@@ -488,7 +512,15 @@ void pit_handler1(void)
         }
 #endif
 
-        SpeedLoop_SetTarget((int)((float)t * sc));
+        if(run_test_mode > 0.5f)
+        {
+            /* 测试模式：左右轮各用各的目标（A1 / A2），可以把某一侧设 0 单独测另一侧 */
+            SpeedLoop_SetTargetLR((int)(run_t_l * sc), (int)(run_t_r * sc));
+        }
+        else
+        {
+            SpeedLoop_SetTarget((int)((float)t * sc));   /* 正常模式：V1 同时给左右 */
+        }
         SpeedLoop_Update((int)enc_l, (int)enc_r);
 
         dbg_duty = (SpeedLoop_GetDutyL() + SpeedLoop_GetDutyR()) >> 1;
@@ -798,7 +830,8 @@ static void Frame_Process(void)
     /* ★ 把"前瞻窗口"画出来：两条黄色虚线之间，就是程序拿来算 Err 的那一段赛道。
           拖 L1 滑动条，黄线会上下移动 —— 往上 = 看得远，往下 = 看脚下。 */
     Screen_ShowProspect((uint8)dbg_prospect, (uint8)(dbg_prospect + dbg_win - 1));
-    Screen_ShowSpeed(SpeedLoop_GetTarget(), SpeedLoop_GetSpeedL(), SpeedLoop_GetSpeedR());
+    Screen_ShowSpeed(SpeedLoop_GetTargetL(), SpeedLoop_GetSpeedL(), SpeedLoop_GetDutyL(),
+                     SpeedLoop_GetTargetR(), SpeedLoop_GetSpeedR(), SpeedLoop_GetDutyR());
 #endif
 
     /* ---------- 9. 发一包波形给 VOFA+（15 通道，顺序见文件头）---------- */
@@ -930,22 +963,39 @@ int main(void)
         if(Vofa_ParamFlag['W'-'A'][1]) { Vofa_ParamFlag['W'-'A'][1] = 0; run_win     = Vofa_Param['W'-'A'][1]; gpio_toggle_level(B9); }
         if(Vofa_ParamFlag['C'-'A'][1]) { Vofa_ParamFlag['C'-'A'][1] = 0; run_err_bias= Vofa_Param['C'-'A'][1]; gpio_toggle_level(B9); }
         if(Vofa_ParamFlag['V'-'A'][1]) { Vofa_ParamFlag['V'-'A'][1] = 0; run_speed   = Vofa_Param['V'-'A'][1]; gpio_toggle_level(B9); }
-        if(Vofa_ParamFlag['U'-'A'][1]) { Vofa_ParamFlag['U'-'A'][1] = 0; run_kp_spd  = Vofa_Param['U'-'A'][1]; gpio_toggle_level(B9); }
-        if(Vofa_ParamFlag['I'-'A'][1]) { Vofa_ParamFlag['I'-'A'][1] = 0; run_ki_spd  = Vofa_Param['I'-'A'][1]; gpio_toggle_level(B9); }
+        if(Vofa_ParamFlag['K'-'A'][1]) { Vofa_ParamFlag['K'-'A'][1] = 0; run_kp_l    = Vofa_Param['K'-'A'][1]; gpio_toggle_level(B9); }
+        if(Vofa_ParamFlag['K'-'A'][2]) { Vofa_ParamFlag['K'-'A'][2] = 0; run_ki_l    = Vofa_Param['K'-'A'][2]; gpio_toggle_level(B9); }
+        if(Vofa_ParamFlag['K'-'A'][3]) { Vofa_ParamFlag['K'-'A'][3] = 0; run_kp_r    = Vofa_Param['K'-'A'][3]; gpio_toggle_level(B9); }
+        if(Vofa_ParamFlag['K'-'A'][4]) { Vofa_ParamFlag['K'-'A'][4] = 0; run_ki_r    = Vofa_Param['K'-'A'][4]; gpio_toggle_level(B9); }
+        if(Vofa_ParamFlag['A'-'A'][1]) { Vofa_ParamFlag['A'-'A'][1] = 0; run_t_l     = Vofa_Param['A'-'A'][1]; gpio_toggle_level(B9); }
+        if(Vofa_ParamFlag['A'-'A'][2]) { Vofa_ParamFlag['A'-'A'][2] = 0; run_t_r     = Vofa_Param['A'-'A'][2]; gpio_toggle_level(B9); }
+        if(Vofa_ParamFlag['M'-'A'][1]) { Vofa_ParamFlag['M'-'A'][1] = 0; run_test_mode = Vofa_Param['M'-'A'][1]; gpio_toggle_level(B9); }
         if(Vofa_ParamFlag['S'-'A'][1]) { Vofa_ParamFlag['S'-'A'][1] = 0; run_switch  = Vofa_Param['S'-'A'][1]; gpio_toggle_level(B9); }
 
         /* ---------- 安全限幅：防止滑动条拖过头把车弄失控 ---------- */
         if(run_speed    <    0.0f) { run_speed    =    0.0f; }   // V1：目标速度（0~600，满速约 460）
         if(run_speed    >  600.0f) { run_speed    =  600.0f; }
-        /* U1/I1 上限收紧：滑动条里存的旧值（比如 10）会把速度环打爆 ——
-           输出会在 ±4000 之间每个 10ms 翻一次，轮子满速嗡嗡响、目标值完全不起作用。
-           有了这个上限，坏值最多也只能到 0.5 / 0.15，环不会炸。 */
-        if(run_kp_spd   <    0.0f) { run_kp_spd   =    0.0f; }   // U1：速度环 Kp
-        if(run_kp_spd   >    0.5f) { run_kp_spd   =    0.5f; }
-        if(run_ki_spd   <    0.0f) { run_ki_spd   =    0.0f; }   // I1：速度环 Ki
-        if(run_ki_spd   >   0.15f) { run_ki_spd   =   0.15f; }
+        /* 目标速度范围（A1/A2 是测试模式下左右各自的目标）*/
+        if(run_t_l      <    0.0f) { run_t_l      =    0.0f; }
+        if(run_t_l      > (float)SPEED_TARGET_MAX) { run_t_l = (float)SPEED_TARGET_MAX; }
+        if(run_t_r      <    0.0f) { run_t_r      =    0.0f; }
+        if(run_t_r      > (float)SPEED_TARGET_MAX) { run_t_r = (float)SPEED_TARGET_MAX; }
 
-        SpeedLoop_SetGains(run_kp_spd, run_ki_spd);              /* ★ 把 U1/I1 送进速度环模块 */
+        /* PI 参数上限收紧：滑动条里存的旧值（比如 10）会把速度环打爆 ——
+           输出会在 ±4000 之间每个 10ms 翻一次，轮子满速嗡嗡响、目标值完全不起作用。 */
+        if(run_kp_l < 0.0f)              { run_kp_l = 0.0f; }
+        if(run_kp_l > SPEED_KP_MAX)      { run_kp_l = SPEED_KP_MAX; }
+        if(run_ki_l < 0.0f)              { run_ki_l = 0.0f; }
+        if(run_ki_l > SPEED_KI_MAX)      { run_ki_l = SPEED_KI_MAX; }
+        if(run_kp_r < 0.0f)              { run_kp_r = 0.0f; }
+        if(run_kp_r > SPEED_KP_MAX)      { run_kp_r = SPEED_KP_MAX; }
+        if(run_ki_r < 0.0f)              { run_ki_r = 0.0f; }
+        if(run_ki_r > SPEED_KI_MAX)      { run_ki_r = SPEED_KI_MAX; }
+
+        if(run_test_mode < 0.5f) { run_test_mode = 0.0f; } else { run_test_mode = 1.0f; }
+
+        /* ★ 左右各自的 PI 参数送进速度环模块 */
+        SpeedLoop_SetGainsLR(run_kp_l, run_ki_l, run_kp_r, run_ki_r);
 
         if(run_p        <    0.0f) { run_p        =    0.0f; }
         if(run_p        >   20.0f) { run_p        =   20.0f; }
