@@ -48,6 +48,7 @@
 *      F1=%f!  -> Err 滤波强度      0 ~ 0.9（0 = 关滤波）
 *      L1=%f!  -> 前瞻起始行        0 ~ 110（越小 = 看得越远）
 *      W1=%f!  -> 前瞻窗口行数      8 ~ 40（越大 = 越平滑、重心越靠近脚下）
+*      C1=%f!  -> Err 偏置          -50 ~ 50（把直道零点归零：显示 -10 就把 C1 设成 -10，即 C1 = 你看到的 Err）
 *      V1=%f!  -> 电机速度          0 ~ 4000
 *      S1=%f!  -> 电机开关          0 = 停，1 = 跑
 *
@@ -126,6 +127,8 @@
 
 #define ERR_D_LIMIT         (20.0f)     // D 项用的"偏差变化量"限幅（像素/帧），防止某一帧抖动把舵机甩飞
 
+#define ERR_SPIKE_LIMIT     (15)        // 一行中线和"左右相邻两行平均"差超过这么多像素 -> 当坏行丢掉
+
 //   前瞻权重表（21 个值，对应窗口里第 0~20 行；第 0 行最远，第 20 行最近）
 //   中间那几个大权重（26/27/31/30）就是"最看重的地方"，两端权重小 ——
 //   这样远处的一点点抖动不会主导偏差，同时又能提前看到弯道。
@@ -172,6 +175,7 @@ static volatile float run_bias    = (float)RUN_OSTU_BIAS;   // T1：阈值偏置
 static volatile float run_errfilt = (float)ERR_FILTER;      // F1：Err 低通滤波强度（0 = 关）
 static volatile float run_prospect = (float)PROSPECT_ROW;   // L1：前瞻起始行（越小看得越远）
 static volatile float run_win      = (float)PROSPECT_WIN;    // W1：前瞻窗口高度（行数，8~40；越大越平滑、重心越靠脚下）
+static volatile float run_err_bias = 0.0f;                   // C1：Err 偏置（把直道零点归零用）
 static volatile float run_switch  = (float)RUN_AUTO_START;  // S1：电机开关（0 = 停，1 = 跑）
 
 static volatile float run_enable  = 0.0f;                   // 1 = 允许跑（上电后由 main 置 1）
@@ -292,6 +296,9 @@ static uint8 Err_Prospect(float *err_out)
     int   win;
     int   i;
     int   k;
+    int   n;
+    int   mid[40];                                      /* 窗口里每一行的中线（最多 40 行）*/
+    uint8 ok[40];                                       /* 这一行能不能用 */
     float sum  = 0.0f;
     float wsum = 0.0f;
     float w;
@@ -317,24 +324,53 @@ static uint8 Err_Prospect(float *err_out)
     dbg_prospect = start;                               /* 发到波形第 15 条，方便看前瞻取在哪一行 */
     dbg_win      = win;
 
-    /* ---------- 2. 窗口内加权平均 ---------- */
+    /* ---------- 2. 先把窗口里每一行的"中线"取出来（丢掉标了丢线的行）---------- */
+    n = 0;
     for(i = 0; i < win; i++)
     {
         int row = start + i;                            /* 从远到近 */
 
         if(row > (MT9V03X_H - 1))   { break; }          /* 已经到图像最下面了 */
 
-        if((1 == Left_Lost_Flag[row]) || (1 == Right_Lost_Flag[row]))
-        {
-            continue;                                   /* ★ 这一行有边界丢线：跳过，不用假数据 */
-        }
+        mid[n] = (Left_Line[row] + Right_Line[row]) >> 1;
+        ok[n]  = ((0 == Left_Lost_Flag[row]) && (0 == Right_Lost_Flag[row])) ? 1 : 0;
+        n++;
+    }
 
-        /* 把 21 点的权重表按比例"拉伸"到 win 点：win = 21 时原样用，win = 31 时每个权重覆盖更多行 */
-        k = (i * PROSPECT_WIN) / win;
+    /* ---------- 3. ★ 去掉"孤立的坏行"----------
+       做法：某一行的中线，如果和【它上、下相邻两行的平均值】差得太多（> ERR_SPIKE_LIMIT），
+             就说明这一行是孤立的假点（最典型：右边界在背景里匹配到假线，一下跑到画面边上）。
+             这种行直接不用。
+       为什么和"相邻两行平均"比：正常的弯道里中线是平滑变化的，和邻居的平均值只差几像素；
+             而假点是"突一下"，和两边都对不上 —— 所以这一招只杀假点，不会误伤正常的弯道。 */
+    for(i = 1; i < (n - 1); i++)
+    {
+        int avg;
+        int d;
+
+        if(0 == ok[i])                        { continue; }
+        if((0 == ok[i-1]) || (0 == ok[i+1]))  { continue; }     /* 邻居本身无效，不做判断 */
+
+        avg = (mid[i-1] + mid[i+1]) >> 1;
+        d   = mid[i] - avg;
+
+        if((d > ERR_SPIKE_LIMIT) || (d < -ERR_SPIKE_LIMIT))
+        {
+            ok[i] = 0;                                          /* ★ 孤立的假点，丢掉 */
+        }
+    }
+
+    /* ---------- 4. 加权平均 ---------- */
+    for(i = 0; i < n; i++)
+    {
+        if(0 == ok[i]) { continue; }
+
+        /* 把 21 点的权重表按比例"拉伸"到 n 点：n = 21 时原样用，n = 31 时每个权重覆盖更多行 */
+        k = (i * PROSPECT_WIN) / n;
         if(k > (PROSPECT_WIN - 1)) { k = (PROSPECT_WIN - 1); }
 
         w     = (float)Prospect_Weight[k];
-        sum  += (float)((MT9V03X_W / 2) - ((Left_Line[row] + Right_Line[row]) >> 1)) * w;
+        sum  += (float)((MT9V03X_W / 2) - mid[i]) * w;
         wsum += w;
     }
 
@@ -343,7 +379,7 @@ static uint8 Err_Prospect(float *err_out)
         return 0;                                       /* 一行有效的都没有：这帧不算，保持上一帧 */
     }
 
-    *err_out = sum / wsum;
+    *err_out = (sum / wsum) - run_err_bias;             /* ★ C1：Err 偏置（直道零点归零用） */
     return 1;
 }
 
@@ -809,7 +845,7 @@ int main(void)
 
         /* 命令格式：【字母】【数字】=【数值】!
               P1 舵机P    D1 舵机D    T1 阈值偏置（可负）
-              F1 Err滤波  L1 前瞻起始行  W1 前瞻窗口行数
+              F1 Err滤波  L1 前瞻起始行  W1 前瞻窗口行数  C1 Err偏置
               V1 电机速度  S1 电机开关（0 = 停，1 = 跑）
            ★ 每收到一次参数 B9 闪一下 —— 这是"参数到底有没有传进来"最直接的证据 */
         if(Vofa_ParamFlag['P'-'A'][1]) { Vofa_ParamFlag['P'-'A'][1] = 0; run_p       = Vofa_Param['P'-'A'][1]; gpio_toggle_level(B9); }
@@ -818,6 +854,7 @@ int main(void)
         if(Vofa_ParamFlag['F'-'A'][1]) { Vofa_ParamFlag['F'-'A'][1] = 0; run_errfilt = Vofa_Param['F'-'A'][1]; gpio_toggle_level(B9); }
         if(Vofa_ParamFlag['L'-'A'][1]) { Vofa_ParamFlag['L'-'A'][1] = 0; run_prospect= Vofa_Param['L'-'A'][1]; gpio_toggle_level(B9); }
         if(Vofa_ParamFlag['W'-'A'][1]) { Vofa_ParamFlag['W'-'A'][1] = 0; run_win     = Vofa_Param['W'-'A'][1]; gpio_toggle_level(B9); }
+        if(Vofa_ParamFlag['C'-'A'][1]) { Vofa_ParamFlag['C'-'A'][1] = 0; run_err_bias= Vofa_Param['C'-'A'][1]; gpio_toggle_level(B9); }
         if(Vofa_ParamFlag['V'-'A'][1]) { Vofa_ParamFlag['V'-'A'][1] = 0; run_duty    = Vofa_Param['V'-'A'][1]; gpio_toggle_level(B9); }
         if(Vofa_ParamFlag['S'-'A'][1]) { Vofa_ParamFlag['S'-'A'][1] = 0; run_switch  = Vofa_Param['S'-'A'][1]; gpio_toggle_level(B9); }
 
@@ -836,6 +873,8 @@ int main(void)
         if(run_prospect >  110.0f) { run_prospect =  110.0f; }
         if(run_win      <    8.0f) { run_win      =    8.0f; }   // W1：窗口行数 8~40
         if(run_win      >   40.0f) { run_win      =   40.0f; }
+        if(run_err_bias <  -50.0f) { run_err_bias =  -50.0f; }   // C1：Err 偏置（±50 像素够用）
+        if(run_err_bias >   50.0f) { run_err_bias =   50.0f; }
         if(run_switch   <    0.5f) { run_switch   =    0.0f; }
         else                       { run_switch   =    1.0f; }
 
