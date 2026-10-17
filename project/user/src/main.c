@@ -47,6 +47,7 @@
 *      T1=%f!  -> 阈值偏置（可负）  -50 ~ +50
 *      F1=%f!  -> Err 滤波强度      0 ~ 0.9（0 = 关滤波）
 *      L1=%f!  -> 前瞻起始行        0 ~ 110（越小 = 看得越远）
+*      W1=%f!  -> 前瞻窗口行数      8 ~ 40（越大 = 越平滑、重心越靠近脚下）
 *      V1=%f!  -> 电机速度          0 ~ 4000
 *      S1=%f!  -> 电机开关          0 = 停，1 = 跑
 *
@@ -120,7 +121,8 @@
 #define OTSU_BANDS          (4)         // 分几段（120 行 / 4 = 每段 30 行）
 
 #define PROSPECT_ROW        (38)        // ★L1  前瞻起始行（行号越小 = 看得越远，0 = 最远，119 = 最近）
-#define PROSPECT_WIN        (21)        // 前瞻窗口高度（行数），和算法文档一致，不用改
+#define PROSPECT_WIN        (21)        // 权重表的点数（算法文档里的 21 个权重）——这是表的长度，不是窗口高度
+                                        //   窗口高度用 W1 在线调（8 ~ 40 行），权重表会按比例拉伸过去
 
 #define ERR_D_LIMIT         (20.0f)     // D 项用的"偏差变化量"限幅（像素/帧），防止某一帧抖动把舵机甩飞
 
@@ -169,6 +171,7 @@ static volatile float run_d       = RUN_D;                  // D1：舵机 D
 static volatile float run_bias    = (float)RUN_OSTU_BIAS;   // T1：阈值偏置（可负）
 static volatile float run_errfilt = (float)ERR_FILTER;      // F1：Err 低通滤波强度（0 = 关）
 static volatile float run_prospect = (float)PROSPECT_ROW;   // L1：前瞻起始行（越小看得越远）
+static volatile float run_win      = (float)PROSPECT_WIN;    // W1：前瞻窗口高度（行数，8~40；越大越平滑、重心越靠脚下）
 static volatile float run_switch  = (float)RUN_AUTO_START;  // S1：电机开关（0 = 停，1 = 跑）
 
 static volatile float run_enable  = 0.0f;                   // 1 = 允许跑（上电后由 main 置 1）
@@ -178,6 +181,7 @@ static volatile int16 enc_l       = 0;                      // 左轮转速（�
 static volatile int16 enc_r       = 0;                      // 右轮转速
 static volatile int   dbg_duty    = 0;                      // 中断里实际输出的占空比（波形第 10 条 / 屏幕 Out）
 static volatile int   dbg_prospect = PROSPECT_ROW;          // 这一帧实际用的前瞻起始行（波形第 15 条）
+static volatile int   dbg_win      = PROSPECT_WIN;           // 这一帧实际用的窗口行数
 static volatile float err_use     = 0.0f;                   // 真正送给舵机 PD 的偏差（= 滤波后的 Err）
 static volatile float err_d_frame = 0.0f;                   // 这一帧的偏差变化量（D 项直接用这个，见 Frame_Process）
 static volatile uint16 wave_cnt   = 0;                      // 心跳计数：每发一包波形 +1
@@ -266,7 +270,8 @@ static void Camera_InitForever(void)
 //  五、前瞻加权偏差（★ 这就是"前瞻"的核心）
 //
 //  做法（和算法文档里的"加权前瞻"一致）：
-//    1. 从 run_prospect 行开始，往下取 21 行（第 0 行最远，第 119 行最近）
+//    1. 从 run_prospect 行（L1）开始，往下取 run_win 行（W1，默认 21 行）
+//       （第 0 行最远，第 119 行最近）
 //    2. 这个窗口会被【自动限制在看得见的范围内】：
 //         Search_Stop_Line = 从图像底部往上能看到多少行，
 //         所以"能看到的最远那一行" = MT9V03X_H - Search_Stop_Line。
@@ -284,10 +289,19 @@ static uint8 Err_Prospect(float *err_out)
 {
     int   start;
     int   farthest;
+    int   win;
     int   i;
+    int   k;
     float sum  = 0.0f;
     float wsum = 0.0f;
     float w;
+
+    /* ---------- 0. 窗口高度（W1，在线可调，8 ~ 40 行）----------
+       窗口越高 = 一次平均进来的行越多 = 曲线更平滑、并且重心往"脚下"偏一点
+       （因为窗口是从 L1 往下延伸的，加高就是把更近的行也纳进来） */
+    win = (int)run_win;
+    if(win <  8) { win =  8; }
+    if(win > 40) { win = 40; }
 
     /* ---------- 1. 决定前瞻起始行 ---------- */
     start = (int)run_prospect;
@@ -301,9 +315,10 @@ static uint8 Err_Prospect(float *err_out)
     if(start < farthest)          { start = farthest; } /* 别往"看不见的"行去看 */
 
     dbg_prospect = start;                               /* 发到波形第 15 条，方便看前瞻取在哪一行 */
+    dbg_win      = win;
 
     /* ---------- 2. 窗口内加权平均 ---------- */
-    for(i = 0; i < PROSPECT_WIN; i++)
+    for(i = 0; i < win; i++)
     {
         int row = start + i;                            /* 从远到近 */
 
@@ -314,7 +329,11 @@ static uint8 Err_Prospect(float *err_out)
             continue;                                   /* ★ 这一行有边界丢线：跳过，不用假数据 */
         }
 
-        w     = (float)Prospect_Weight[i];
+        /* 把 21 点的权重表按比例"拉伸"到 win 点：win = 21 时原样用，win = 31 时每个权重覆盖更多行 */
+        k = (i * PROSPECT_WIN) / win;
+        if(k > (PROSPECT_WIN - 1)) { k = (PROSPECT_WIN - 1); }
+
+        w     = (float)Prospect_Weight[k];
         sum  += (float)((MT9V03X_W / 2) - ((Left_Line[row] + Right_Line[row]) >> 1)) * w;
         wsum += w;
     }
@@ -670,7 +689,7 @@ static void Frame_Process(void)
     Screen_ShowParam((int)run_switch, dbg_duty, Vofa_RxBytes, Vofa_CmdOk);
     /* ★ 把"前瞻窗口"画出来：两条黄色虚线之间，就是程序拿来算 Err 的那一段赛道。
           拖 L1 滑动条，黄线会上下移动 —— 往上 = 看得远，往下 = 看脚下。 */
-    Screen_ShowProspect((uint8)dbg_prospect, (uint8)(dbg_prospect + PROSPECT_WIN - 1));
+    Screen_ShowProspect((uint8)dbg_prospect, (uint8)(dbg_prospect + dbg_win - 1));
 #endif
 
     /* ---------- 9. 发一包波形给 VOFA+（15 通道，顺序见文件头）---------- */
@@ -790,7 +809,7 @@ int main(void)
 
         /* 命令格式：【字母】【数字】=【数值】!
               P1 舵机P    D1 舵机D    T1 阈值偏置（可负）
-              F1 Err滤波  L1 前瞻起始行
+              F1 Err滤波  L1 前瞻起始行  W1 前瞻窗口行数
               V1 电机速度  S1 电机开关（0 = 停，1 = 跑）
            ★ 每收到一次参数 B9 闪一下 —— 这是"参数到底有没有传进来"最直接的证据 */
         if(Vofa_ParamFlag['P'-'A'][1]) { Vofa_ParamFlag['P'-'A'][1] = 0; run_p       = Vofa_Param['P'-'A'][1]; gpio_toggle_level(B9); }
@@ -798,6 +817,7 @@ int main(void)
         if(Vofa_ParamFlag['T'-'A'][1]) { Vofa_ParamFlag['T'-'A'][1] = 0; run_bias    = Vofa_Param['T'-'A'][1]; gpio_toggle_level(B9); }
         if(Vofa_ParamFlag['F'-'A'][1]) { Vofa_ParamFlag['F'-'A'][1] = 0; run_errfilt = Vofa_Param['F'-'A'][1]; gpio_toggle_level(B9); }
         if(Vofa_ParamFlag['L'-'A'][1]) { Vofa_ParamFlag['L'-'A'][1] = 0; run_prospect= Vofa_Param['L'-'A'][1]; gpio_toggle_level(B9); }
+        if(Vofa_ParamFlag['W'-'A'][1]) { Vofa_ParamFlag['W'-'A'][1] = 0; run_win     = Vofa_Param['W'-'A'][1]; gpio_toggle_level(B9); }
         if(Vofa_ParamFlag['V'-'A'][1]) { Vofa_ParamFlag['V'-'A'][1] = 0; run_duty    = Vofa_Param['V'-'A'][1]; gpio_toggle_level(B9); }
         if(Vofa_ParamFlag['S'-'A'][1]) { Vofa_ParamFlag['S'-'A'][1] = 0; run_switch  = Vofa_Param['S'-'A'][1]; gpio_toggle_level(B9); }
 
@@ -814,6 +834,8 @@ int main(void)
         if(run_errfilt  >    0.9f) { run_errfilt  =    0.9f; }
         if(run_prospect <    0.0f) { run_prospect =    0.0f; }
         if(run_prospect >  110.0f) { run_prospect =  110.0f; }
+        if(run_win      <    8.0f) { run_win      =    8.0f; }   // W1：窗口行数 8~40
+        if(run_win      >   40.0f) { run_win      =   40.0f; }
         if(run_switch   <    0.5f) { run_switch   =    0.0f; }
         else                       { run_switch   =    1.0f; }
 
