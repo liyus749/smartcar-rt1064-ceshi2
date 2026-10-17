@@ -436,16 +436,6 @@
               <FilePath>..\code\Motor.c</FilePath>
             </File>
             <File>
-              <FileName>MotorSpeed.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>..\code\MotorSpeed.h</FilePath>
-            </File>
-            <File>
-              <FileName>MotorSpeed.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\code\MotorSpeed.c</FilePath>
-            </File>
-            <File>
               <FileName>Servo.h</FileName>
               <FileType>5</FileType>
               <FilePath>..\code\Servo.h</FilePath>
