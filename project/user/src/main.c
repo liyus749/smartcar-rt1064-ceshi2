@@ -50,6 +50,7 @@
 *      R2=%f!  -> 中块权重          0 ~ 5
 *      R3=%f!  -> 近块权重          0 ~ 5（★默认 1 / 2 / 2）
 *      H1=%f!  -> 航向项权重        0 ~ 5（★默认 0.5；0 = 只看位置，不管赛道往哪边拐）
+*      M1=%f!  -> 偏差算法          0 = 远中近分块加权   1 = 最小二乘拟合（★默认）
 *      C1=%f!  -> Err 偏置          -50 ~ 50（把直道零点归零：显示 -10 就把 C1 设成 -10，即 C1 = 你看到的 Err）
 *      V1=%f!  -> 电机占空比        0 ~ 4000（800 = 8%，★平时只调这一个）
 *      S1=%f!  -> 电机开关          0 = 停，1 = 跑
@@ -254,6 +255,7 @@ static volatile float run_w_far    = ZONE_FAR_DEFAULT;       // R1：远块权�
 static volatile float run_w_mid    = ZONE_MID_DEFAULT;       // R2：中块权重
 static volatile float run_w_near   = ZONE_NEAR_DEFAULT;      // R3：近块权重
 static volatile float run_ang_w    = ANG_W_DEFAULT;          // H1：航向项权重
+static volatile float run_err_mode = 1.0f;                   // M1：0 = 分块加权  1 = 最小二乘（★默认）
 static volatile float run_err_bias = 0.0f;                   // C1：Err 偏置（把直道零点归零用）
 static volatile float run_switch  = (float)RUN_AUTO_START;  // S1：电机开关（0 = 停，1 = 跑）
 
@@ -365,12 +367,63 @@ static void Camera_InitForever(void)
 static int   zone_mid[MT9V03X_H];                  /* 每一行的中线 */
 static uint8 zone_ok[MT9V03X_H];                   /* 这一行能不能用 */
 
+static int   ln_farthest = 0;                      /* 看得见的最远行 */
+static int   ln_span     = 0;                      /* 可见行数 */
+static int   ln_far_end  = 0;                      /* 远块 / 中块 分界 */
+static int   ln_mid_end  = 0;                      /* 中块 / 近块 分界 */
+
+//-------------------------------------------------------------------------------------------------------------------
+// 函数简介     计算每一行的中线 + 有效性（丢线、孤立假点）—— 两种偏差算法共用这一份数据
+// 返回参数     1 = 数据够用   0 = 看得太少（这帧不用）
+//-------------------------------------------------------------------------------------------------------------------
+static uint8 Image_Line_Prepare(void)
+{
+    int farthest;
+    int span;
+    int row;
+
+    farthest = MT9V03X_H - Search_Stop_Line;
+    if(farthest < 0)             { farthest = 0; }
+    if(farthest > MT9V03X_H - 2) { farthest = MT9V03X_H - 2; }
+
+    span = MT9V03X_H - farthest;
+    if(span < 9)                 { return 0; }          /* 看得太少，这帧不算 */
+
+    ln_farthest = farthest;
+    ln_span     = span;
+    ln_far_end  = farthest + span / 3;
+    ln_mid_end  = farthest + (span * 2) / 3;
+
+    dbg_zone_far = ln_far_end;
+    dbg_zone_mid = ln_mid_end;
+
+    /* 每一行的中线 + 有效性（两边都找到了才算有效）*/
+    for(row = farthest; row < MT9V03X_H; row++)
+    {
+        zone_mid[row] = (Left_Line[row] + Right_Line[row]) >> 1;
+        zone_ok[row]  = ((0 == Left_Lost_Flag[row]) && (0 == Right_Lost_Flag[row])) ? 1 : 0;
+    }
+
+    /* 去掉"孤立的假点"：和上下相邻两行的平均差太多 */
+    for(row = farthest + 1; row < MT9V03X_H - 1; row++)
+    {
+        int avg;
+        int d;
+
+        if(0 == zone_ok[row])                              { continue; }
+        if((0 == zone_ok[row-1]) || (0 == zone_ok[row+1])) { continue; }
+
+        avg = (zone_mid[row-1] + zone_mid[row+1]) >> 1;
+        d   = zone_mid[row] - avg;
+
+        if((d > ERR_SPIKE_LIMIT) || (d < -ERR_SPIKE_LIMIT)) { zone_ok[row] = 0; }
+    }
+
+    return 1;
+}
+
 static uint8 Err_Zone(float *err_out)
 {
-    int   farthest;
-    int   span;
-    int   far_end;
-    int   mid_end;
     int   row;
     int   z;
     int   v;
@@ -381,57 +434,18 @@ static uint8 Err_Zone(float *err_out)
     float total_w = 0.0f;
     float lateral;
 
-    /* ---------- 1. 看得见赛道的那一段 ---------- */
-    farthest = MT9V03X_H - Search_Stop_Line;
-    if(farthest < 0)             { farthest = 0; }
-    if(farthest > MT9V03X_H - 2) { farthest = MT9V03X_H - 2; }
-
-    span = MT9V03X_H - farthest;
-    if(span < 9)                 { return 0; }          /* 看得太少，这帧不算 */
-
-    far_end = farthest + span / 3;                      /* 远块：[farthest, far_end) */
-    mid_end = farthest + (span * 2) / 3;                /* 中块：[far_end, mid_end) 近块：[mid_end, 99] */
-
-    dbg_zone_far = far_end;
-    dbg_zone_mid = mid_end;
-
-    /* ---------- 2. 取每一行的中线和有效性 ---------- */
-    for(row = farthest; row < MT9V03X_H; row++)
-    {
-        zone_mid[row] = (Left_Line[row] + Right_Line[row]) >> 1;
-        zone_ok[row]  = ((0 == Left_Lost_Flag[row]) && (0 == Right_Lost_Flag[row])) ? 1 : 0;
-    }
-
-    /* ---------- 3. 去掉"孤立的假点"----------
-       一行中线如果和"上下相邻两行的平均"差太多（> ERR_SPIKE_LIMIT），就是假点
-       （典型情况：右边界在背景里匹配到假线，一下跑到画面边上）。
-       和邻居平均比而不是和某一行比：正常的弯道里中线是平滑变化的，不会误伤。 */
-    for(row = farthest + 1; row < MT9V03X_H - 1; row++)
-    {
-        int avg;
-        int d;
-
-        if(0 == zone_ok[row])                        { continue; }
-        if((0 == zone_ok[row-1]) || (0 == zone_ok[row+1])) { continue; }
-
-        avg = (zone_mid[row-1] + zone_mid[row+1]) >> 1;
-        d   = zone_mid[row] - avg;
-
-        if((d > ERR_SPIKE_LIMIT) || (d < -ERR_SPIKE_LIMIT)) { zone_ok[row] = 0; }
-    }
-
     /* ---------- 4. 分块累加 ---------- */
     cnt[0] = cnt[1] = cnt[2] = 0;
     sum[0] = sum[1] = sum[2] = 0.0f;
     dbg_valid_rows = 0;
 
-    for(row = farthest; row < MT9V03X_H; row++)
+    for(row = ln_farthest; row < MT9V03X_H; row++)
     {
         if(0 == zone_ok[row]) { continue; }
 
-        if     (row < far_end) { z = 0; }               /* 远块 */
-        else if(row < mid_end) { z = 1; }               /* 中块 */
-        else                   { z = 2; }               /* 近块 */
+        if     (row < ln_far_end) { z = 0; }            /* 远块 */
+        else if(row < ln_mid_end) { z = 1; }            /* 中块 */
+        else                      { z = 2; }            /* 近块 */
 
         v = zone_mid[row];
 
@@ -469,6 +483,79 @@ static uint8 Err_Zone(float *err_out)
     }
 
     *err_out = lateral - run_err_bias;                  /* C1：零点偏置 */
+    return 1;
+}
+
+//===================================================================================================================
+//  五点三、偏差算法 B：最小二乘拟合（比分块平均更稳）
+//
+//   思路：把有效行的"中线"看成一条曲线 x = f(y)，用最小二乘拟合一条直线：
+//
+//       x = k*y + b        （y = 行号，x = 中线列号）
+//
+//   拟合是"几十个点一起算"，单行噪声会被平均掉 —— 这就是它比分块平均稳的地方。
+//   而且一次拟合同时得到两样东西：
+//
+//       位置偏差  e_pos  = 94 − (k*y中 + b)   "现在偏了多少像素"
+//       航向偏差  e_head = k × 20             "每走 20 行，中线会再偏多少像素"
+//
+//   Err = e_pos + H1 × e_head − C1
+//
+//   右弯：远处（y 小）中线更靠右 -> 往下走 x 变小 -> k < 0 -> e_head < 0 -> 往右打 ✓
+//
+//   参数 M1：0 = 用分块加权（旧方案）   1 = 用最小二乘（★推荐先试这个）
+//===================================================================================================================
+static uint8 Err_LeastSquares(float *err_out)
+{
+    int   y0;
+    int   y1;
+    int   y_mid;
+    int   row;
+    int   n = 0;
+    float sx  = 0.0f;
+    float sy  = 0.0f;
+    float sxy = 0.0f;
+    float syy = 0.0f;
+    float den;
+    float k;
+    float b;
+    float e_pos;
+    float e_head;
+
+    /* ---------- 1. 取"可见赛道中间那 60% 的行"做拟合 ----------
+       去掉最上面 20%（贴地平线，线细、噪声大）和最下面 20%（贴车头，容易受车体/阴影影响）*/
+    y0 = ln_farthest + ln_span / 5;
+    y1 = ln_farthest + (ln_span * 4) / 5;
+
+    if((y1 - y0) < 8) { return 0; }                     /* 行数太少，拟合不可靠 */
+
+    /* ---------- 2. 累加最小二乘需要的和 ---------- */
+    for(row = y0; row <= y1; row++)
+    {
+        if(0 == zone_ok[row]) { continue; }
+
+        sx  += (float)zone_mid[row];
+        sy  += (float)row;
+        sxy += (float)zone_mid[row] * (float)row;
+        syy += (float)row * (float)row;
+        n++;
+    }
+
+    if(n < 8) { return 0; }                             /* 有效点太少 */
+
+    /* ---------- 3. 拟合直线 x = k*y + b ---------- */
+    den = (float)n * syy - sy * sy;
+    if((den < 0.001f) && (den > -0.001f)) { return 0; } /* 分母为 0，拟合不了 */
+
+    k = ((float)n * sxy - sx * sy) / den;
+    b = (sx - k * sy) / (float)n;
+
+    /* ---------- 4. 位置项 + 航向项 ---------- */
+    y_mid  = (y0 + y1) / 2;
+    e_pos  = (float)(MT9V03X_W / 2) - (k * (float)y_mid + b);   /* 预览点处的横向偏差 */
+    e_head = k * 20.0f;                                         /* 像素/行 × 20 行 = 像素 */
+
+    *err_out = e_pos + run_ang_w * e_head - run_err_bias;       /* C1：零点偏置 */
     return 1;
 }
 
@@ -1057,14 +1144,21 @@ static void Frame_Process(void)
     Island_Detect();
 #endif
 
-    /* ---------- 4. 算偏差（远/中/近 三段分块加权）---------- */
-    if(Img_Disappear_Flag == 0)
+    /* ---------- 4. 算偏差 ----------
+       先把"每行中线 + 有效性"准备好，再按 M1 选算法：
+         M1 = 0 -> 远/中/近 三段分块加权
+         M1 = 1 -> 最小二乘拟合（位置 + 航向）*/
+    if(Image_Line_Prepare())
     {
-        float e;
-
-        if(Err_Zone(&e))                                /* 返回 0 = 这帧有效数据太少 */
+        if(Img_Disappear_Flag == 0)
         {
-            Err = e;
+            float e;
+            uint8 got;
+
+            if(run_err_mode > 0.5f) { got = Err_LeastSquares(&e); }
+            else                    { got = Err_Zone(&e);         }
+
+            if(got) { Err = e; }                        /* got = 0：这帧有效数据太少，保持上一帧 */
         }
     }
 
@@ -1263,7 +1357,7 @@ int main(void)
 
         /* 命令格式：【字母】【数字】=【数值】!
               P1 舵机P    D1 舵机D    T1 阈值偏置（可负）
-              F1 Err滤波  R1/R2/R3 远中近三块权重  H1 航向项权重  C1 Err偏置
+              F1 Err滤波  R1/R2/R3 远中近三块权重  H1 航向项权重  M1 偏差算法  C1 Err偏置
               V1 电机占空比
               S1 电机开关（0 = 停，1 = 跑）
            ★ 每收到一次参数 B9 闪一下 —— 这是"参数到底有没有传进来"最直接的证据 */
@@ -1275,6 +1369,7 @@ int main(void)
         if(Vofa_ParamFlag['R'-'A'][2]) { Vofa_ParamFlag['R'-'A'][2] = 0; run_w_mid   = Vofa_Param['R'-'A'][2]; gpio_toggle_level(B9); }
         if(Vofa_ParamFlag['R'-'A'][3]) { Vofa_ParamFlag['R'-'A'][3] = 0; run_w_near  = Vofa_Param['R'-'A'][3]; gpio_toggle_level(B9); }
         if(Vofa_ParamFlag['H'-'A'][1]) { Vofa_ParamFlag['H'-'A'][1] = 0; run_ang_w   = Vofa_Param['H'-'A'][1]; gpio_toggle_level(B9); }
+        if(Vofa_ParamFlag['M'-'A'][1]) { Vofa_ParamFlag['M'-'A'][1] = 0; run_err_mode= Vofa_Param['M'-'A'][1]; gpio_toggle_level(B9); }
         if(Vofa_ParamFlag['C'-'A'][1]) { Vofa_ParamFlag['C'-'A'][1] = 0; run_err_bias= Vofa_Param['C'-'A'][1]; gpio_toggle_level(B9); }
         if(Vofa_ParamFlag['V'-'A'][1]) { Vofa_ParamFlag['V'-'A'][1] = 0; run_speed   = Vofa_Param['V'-'A'][1]; gpio_toggle_level(B9); }
         if(Vofa_ParamFlag['S'-'A'][1]) { Vofa_ParamFlag['S'-'A'][1] = 0; run_switch  = Vofa_Param['S'-'A'][1]; gpio_toggle_level(B9); }
@@ -1299,6 +1394,7 @@ int main(void)
         if(run_w_near   > ZONE_W_MAX) { run_w_near = ZONE_W_MAX; }
         if(run_ang_w    <    0.0f) { run_ang_w    =    0.0f; }   // H1：航向项权重 0~5
         if(run_ang_w    > ANG_W_MAX) { run_ang_w  = ANG_W_MAX; }
+        if(run_err_mode < 0.5f) { run_err_mode = 0.0f; } else { run_err_mode = 1.0f; }   // M1
         if(run_err_bias <  -50.0f) { run_err_bias =  -50.0f; }   // C1：Err 偏置（±50 像素够用）
         if(run_err_bias >   50.0f) { run_err_bias =   50.0f; }
         if(run_switch   <    0.5f) { run_switch   =    0.0f; }
