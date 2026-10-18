@@ -184,10 +184,23 @@ void pit_handler1(void)
     Get_Gyroscope_Angle();
 #endif
 
-    /* 编码器：每 10ms 的计数 = 这一小段时间转了多少 */
-    enc_l = (int16)(-(int32)encoder_get_count(QTIMER1_ENCODER1));
+    /* 编码器：每 10ms 的计数 = 这一小段时间转了多少。
+
+       ★ 只正转，所以统一取正数：两个轮子的"前进转速"都显示成正数，
+         不再搞一个正一个负。这样波形第 3/4 条、屏幕 Act 都直接表示转速大小。
+         （编码器硬件 A/B 相序接反也无所谓，绝对值兜底。） */
+    {
+        int32 c = (int32)encoder_get_count(QTIMER1_ENCODER1);
+        if(c < 0) { c = -c; }
+        enc_l = (int16)c;
+    }
     encoder_clear_count(QTIMER1_ENCODER1);
-    enc_r = (int16)( (int32)encoder_get_count(QTIMER1_ENCODER2));
+
+    {
+        int32 c = (int32)encoder_get_count(QTIMER1_ENCODER2);
+        if(c < 0) { c = -c; }
+        enc_r = (int16)c;
+    }
     encoder_clear_count(QTIMER1_ENCODER2);
 }
 
