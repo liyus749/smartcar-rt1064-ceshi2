@@ -96,10 +96,10 @@ void Screen_ShowFrame(const uint8 *gray, const uint8 *bin,
 }
 
 //-------------------------------------------------------------------------------------------------------------------
-// 函数简介     显示状态文字（Err / 环岛状态 / 速度）
+// 函数简介     显示状态文字（Err / 环岛状态 / 十字标志 / 占空比）
 // 备注信息     文字写在图像下方，和图像区域不重叠，所以每帧调用也不会闪
 //-------------------------------------------------------------------------------------------------------------------
-void Screen_ShowStatus(float err, int state, int duty)
+void Screen_ShowStatus(float err, int state, int duty, int cross)
 {
     /* ★ Err 的整数位数给 3 位（原来是 2 位）。
        逐飞这个 show_float 的实现是"整数部分按 num 位取模"，
@@ -110,6 +110,9 @@ void Screen_ShowStatus(float err, int state, int duty)
 
     ips200_show_string(0,  SCR_TXT_Y + 16,  "Isl ");
     ips200_show_int   (40, SCR_TXT_Y + 16,  state, 2);
+
+    ips200_show_string(80, SCR_TXT_Y + 16,  "Cr ");
+    ips200_show_int   (112, SCR_TXT_Y + 16, cross, 1);
 
     ips200_show_string(0,  SCR_TXT_Y + 32,  "Spd ");    /* 电机占空比设定值（V1）*/
     ips200_show_int   (40, SCR_TXT_Y + 32,  duty, 4);

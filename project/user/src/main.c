@@ -181,7 +181,10 @@
 #define EDGE_WIN_WIDE       (24)        // 找不到时再用这个更宽的窗口（远处透视压缩，边线走得快）
 #define EDGE_MIN_W          (15)        // 赛道最窄宽度（像素）
 #define EDGE_MAX_W          (180)       // 赛道最宽宽度（像素）
-#define EDGE_LOST_MAX       (15)        // 连续丢这么多行，认为赛道到头了，停止跟踪
+#define EDGE_LOST_MAX       (28)        // 连续丢这么多行才停止跟踪
+                                        //   ★ 不能太小：十字路口中间有十几到二十几行两边全丢，
+                                        //     太小的话跟踪在十字中间就停了，十字"上方还有赛道"这个
+                                        //     条件永远不成立，十字就识别不出来。
 
 //-------------------------------------------------------------------------------------------------------------------
 // 【图像滤波】3x3 邻域计数（形态学）—— 参考《八邻域_v2.0》的 image_filter()
@@ -195,6 +198,19 @@
 #define USE_IMG_FILTER      (1)
 #define IMG_FLT_MAX_WHITE   (6)         // 邻居里 >=6 个白 -> 填白
 #define IMG_FLT_MIN_WHITE   (2)         // 邻居里 <=2 个白 -> 改黑
+
+//-------------------------------------------------------------------------------------------------------------------
+// 【十字路口识别】参数
+//
+//   十字在二值图上最明显的特征：赛道走到中间，左右【两边边线同时消失】（十字两条横路的白区域连成一片），
+//   而这一段的上方又能重新看到赛道。所以判据是：
+//     ① 连续 CROSS_LOST_MIN 行，左右两边都是丢线；
+//     ② 这一段的【上方】还有有效行（排除"视野到头/赛道走完"）；
+//     ③ 这一段不贴着图像顶部。
+//   识别到之后就按"直行"处理（十字的正确走法就是直着过去），保持 CROSS_HOLD_FRAMES 帧。
+//-------------------------------------------------------------------------------------------------------------------
+#define CROSS_LOST_MIN      (12)        // 连续多少行"两边都丢线"才怀疑是十字
+#define CROSS_HOLD_FRAMES   (20)        // 识别后保持多少帧（50fps -> 20 帧 = 400ms）
 
 #define ERR_D_LIMIT         (20.0f)     // D 项用的"偏差变化量"限幅（像素/帧），防止某一帧抖动把舵机甩飞
 
@@ -249,6 +265,8 @@ static volatile int16 enc_r       = 0;                      // 右轮转速
 static volatile int   dbg_duty    = 0;                      // 中断里实际输出的占空比（波形第 10 条 / 屏幕 Out）
 static uint16         hb_cnt      = 0;                      // 心跳灯计数（25 x 20ms = 500ms）
 static volatile int   dbg_valid_rows = 0;                    // 这一帧参与算偏差的有效行数（波形第 15 条）
+static volatile uint8 cross_flag = 0;                        // 1 = 正在过十字（此时强制直行）
+static uint16         cross_hold = 0;                        // 十字保持计数（帧）
 static volatile int   dbg_zone_far  = 0;                     // 远块起始行（给屏幕画分界线用）
 static volatile int   dbg_zone_mid  = 0;                     // 中块起始行
 static volatile float err_use     = 0.0f;                   // 真正送给舵机 PD 的偏差（= 滤波后的 Err）
@@ -830,6 +848,15 @@ static void Track_Lines(void)
         if(run_w > best_w) { best_w = run_w;  best_l = run_start;  best_r = MT9V03X_W - 2; }
     }
 
+    /* ★ 先把所有行标成"丢线"，下面只把跟踪成功的行改回来。
+       这样"丢线标志"就完全对应我们自己跟踪出来的边线，
+       十字识别 / 偏差计算 / 屏幕画线 用到的都是同一份数据。 */
+    for(row = 0; row < MT9V03X_H; row++)
+    {
+        Left_Lost_Flag[row]  = 1;
+        Right_Lost_Flag[row] = 1;
+    }
+
     if((best_r - best_l) < EDGE_MIN_W) { return; }          /* 底行没有可信的赛道白段 */
 
     l = best_l;
@@ -926,6 +953,78 @@ static void Track_Lines(void)
 
 
 //===================================================================================================================
+//  六点七、十字路口识别
+//
+//   判据（三个同时满足，详见文件头"十字路口识别参数"的说明）：
+//     ① 连续 ≥ CROSS_LOST_MIN 行，左右两边【都】丢线；
+//     ② 这一段的上方还有有效行（说明不是视野到头）；
+//     ③ 这一段不贴着图像顶部。
+//
+//   识别到之后：cross_flag = 1，保持 CROSS_HOLD_FRAMES 帧。
+//   这期间 Frame_Process 会把 Err 强制成 0（直行），等出了十字再恢复正常巡线。
+//===================================================================================================================
+static void Cross_Check(void)
+{
+    int row;
+    int run;
+    int best;
+    int best_hi;
+    int valid_above;
+
+    run      = 0;
+    best     = 0;
+    best_hi  = 0;
+
+    /* 从最底行往上数"连续两边都丢线"的最长一段 */
+    for(row = MT9V03X_H - 1; row >= 0; row--)
+    {
+        if((1 == Left_Lost_Flag[row]) && (1 == Right_Lost_Flag[row]))
+        {
+            run++;
+            if(run > best)
+            {
+                best    = run;
+                best_hi = row;                              /* 这一段目前的上沿 */
+            }
+        }
+        else
+        {
+            run = 0;
+        }
+    }
+
+    /* 这一段的上方还有没有有效行？ */
+    valid_above = 0;
+    for(row = best_hi - 1; (row >= 0) && (best > 0); row--)
+    {
+        if((0 == Left_Lost_Flag[row]) && (0 == Right_Lost_Flag[row]))
+        {
+            valid_above = 1;
+            break;
+        }
+    }
+
+    if((best >= CROSS_LOST_MIN) && (valid_above) && (best_hi >= 3))
+    {
+        cross_flag = 1;
+        cross_hold = CROSS_HOLD_FRAMES;
+        return;
+    }
+
+    /* 没检测到：把保持计数减完就退出十字 */
+    if(cross_hold > 0)
+    {
+        cross_hold--;
+        if(0 == cross_hold) { cross_flag = 0; }
+    }
+    else
+    {
+        cross_flag = 0;
+    }
+}
+
+
+//===================================================================================================================
 //  七、一帧图像处理（摄像头出一帧就调一次）
 //     流程：阈值+二值化 -> 巡线找边界 -> 环岛识别 -> 算分块偏差 -> 滤波 -> 屏幕 -> 波形
 //===================================================================================================================
@@ -949,6 +1048,8 @@ static void Frame_Process(void)
     /* ---------- 2.5 边线跟踪（八邻域）：用"跟着上一行走"的方式重写边线，去掉乱跳 ------- */
     Track_Lines();
 
+    /* ---------- 2.6 十字路口识别（两边同时断线 + 上方还有赛道）---------- */
+    Cross_Check();
     /* ---------- 3. 环岛识别（学长的 8 状态机）----------
        它可能会调用 Left_Add_Line/Right_Add_Line 来"补线"，
        所以必须放在巡线之后、算偏差之前 —— 顺序和学长主程序里一样，顺序错了补线不生效。 */
@@ -966,6 +1067,11 @@ static void Frame_Process(void)
             Err = e;
         }
     }
+
+    /* ★ 正在过十字：强制直行（十字的正确走法就是直着过去）
+       放在滤波之前，这样滤波会把"打正"这个过程平滑掉，不会突然甩一下 */
+    if(cross_flag) { Err = 0.0f; }
+
     if(Err != Err) { Err = err_last; }                  /* 兜底：万一是 NaN，退回上一拍 */
 
     /* ---------- 5. Err 低通滤波（PD 用的是滤波后的 err_use）----------
@@ -1034,7 +1140,7 @@ static void Frame_Process(void)
 #if USE_SCREEN
     /* ---------- 8. 屏幕：图像 + 三条边线 + 状态 ---------- */
     Screen_ShowFrame(mt9v03x_image[0], image_two_value[0], line_left, line_mid, line_right);
-    Screen_ShowStatus(Err, Island_State, (int)run_speed);           /* 屏幕第 3 行：占空比设定 */
+    Screen_ShowStatus(Err, Island_State, (int)run_speed, (int)cross_flag);
     Screen_ShowParam((int)run_switch, dbg_duty, Vofa_RxBytes, Vofa_CmdOk);
     /* 两条黄线 = 分块边界：上面是远块/中块的分界，下面是中块/近块的分界 */
     Screen_ShowProspect((uint8)dbg_zone_far, (uint8)dbg_zone_mid);
@@ -1215,3 +1321,4 @@ int main(void)
         }
     }
 }
+

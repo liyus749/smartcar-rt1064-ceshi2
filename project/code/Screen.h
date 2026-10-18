@@ -86,10 +86,11 @@ void Screen_ShowFrame(const uint8 *gray, const uint8 *bin,
 // 函数简介     在图像下方显示状态（每帧调，开销很小）
 // 参数说明     err         图像偏差 Err
 // 参数说明     state       环岛状态（不用环岛就传 0）
-// 参数说明     duty        电机速度设定值
-// 使用示例     Screen_ShowStatus(Err, Island_State, (int)run_duty);
+// 参数说明     duty        电机占空比设定值（V1）
+// 参数说明     cross       十字路口标志（0 = 没有，1 = 正在过十字）
+// 使用示例     Screen_ShowStatus(Err, Island_State, (int)run_speed, cross_flag);
 //-------------------------------------------------------------------------------------------------------------------
-void Screen_ShowStatus(float err, int state, int duty);
+void Screen_ShowStatus(float err, int state, int duty, int cross);
 
 //-------------------------------------------------------------------------------------------------------------------
 // 函数简介     显示"参数下行"的诊断信息（电机开关状态 + 实际输出 + 收到多少字节 + 收到几条参数）
