@@ -466,6 +466,16 @@
               <FilePath>..\code\Contrast.h</FilePath>
             </File>
             <File>
+              <FileName>LineDetect.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\code\LineDetect.c</FilePath>
+            </File>
+            <File>
+              <FileName>LineDetect.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\code\LineDetect.h</FilePath>
+            </File>
+            <File>
               <FileName>Err.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\code\Err.c</FilePath>

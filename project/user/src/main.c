@@ -20,7 +20,8 @@
 *   图像窗口：能看到 188x100 灰度图（约 2~3 帧/秒，无线串口带宽有限）
 *   波形 8 条：ErrUse / 舵机打角 / 左轮 / 右轮 / 目标速度 / 实测速度 / 输出占空比 / 视野长度
 *   参数 8 个（助手 UI 通道 0~7）：
-*      0 目标速度    1 电机P   2 电机I   3 电机D   4 舵机P   5 舵机D   6 对比度阈值   7 电机开关
+*      0 目标速度    1 电机P   2 电机I   3 电机D   4 舵机P   5 舵机D   6 对比度阈值
+*      7 模式：0 = 停，1 = 对比度巡线，2 = 分段大津法巡线
 *
 * ================================ B9 蓝灯灯语 ================================
 *   快闪 3 下        上电自检：程序跑起来了
@@ -50,6 +51,7 @@
 #include "MotorPID.h"
 #include "Assistant.h"
 #include "Contrast.h"
+#include "LineDetect.h"
 #include "Err.h"
 
 
@@ -110,6 +112,7 @@ static volatile float run_d        = SERVO_D_DEFAULT;
 static volatile float run_contrast = CONTRAST_RATIO_DEFAULT;
 static volatile float run_switch   = (float)RUN_AUTO_START;
 static volatile float run_enable   = 0.0f;                 // 初始化完成后置 1，允许跑
+static volatile uint8 run_line_mode = LINE_MODE_CONTRAST;  // 当前巡线方案（0=对比度，1=大津法）
 
 static volatile int16 enc_l = 0;                           // 左轮编码器（计数/10ms）
 static volatile int16 enc_r = 0;                           // 右轮编码器（计数/10ms）
@@ -270,10 +273,12 @@ void pit_handler0(void)
 static void Frame_Process(void)
 {
     int   i;
+    uint8 line_mode;
     float wave[ASSISTANT_OSC_CH_MAX];
 
-    /* 1. 对比度巡线：生成二值图 + 左右边界 + 视野长度 */
-    Contrast_Process(mt9v03x_image[0]);
+    /* 1. 巡线：助手通道 7 选择方案（1 = 对比度，2 = 分段大津法）*/
+    line_mode = run_line_mode;
+    LineDetect_Process(mt9v03x_image[0], line_mode);
 
     /* 2. 环岛识别（会读/补边界，放在巡线之后、算偏差之前）*/
 #if USE_ISLAND
@@ -323,7 +328,8 @@ static void Frame_Process(void)
 #if USE_SCREEN
     /* 5. 屏幕 */
     Screen_ShowFrame(mt9v03x_image[0], image_two_value[0], line_left, line_mid, line_right);
-    Screen_ShowRefCol(Contrast_GetReferenceCol());
+    Screen_ShowRefCol(LineDetect_GetRefCol());
+    Screen_ShowLineMode((int)line_mode);
     Screen_ShowStatus(Err, Island_State, (int)MotorPID_GetTarget());
     Screen_ShowParam((int)run_switch, dbg_duty, (int)MotorPID_GetTarget(), (int)MotorPID_GetMeasured());
 #endif
@@ -367,6 +373,7 @@ int main(void)
     /* 控制/巡线/偏差模块 */
     MotorPID_Init();
     Contrast_Init();
+    LineDetect_Init();
     Err_Init();
 
 #if USE_SCREEN
@@ -467,8 +474,9 @@ int main(void)
         if(run_d        >   50.0f) { run_d        =   50.0f; }
         if(run_contrast <    0.0f) { run_contrast =    0.0f; }
         if(run_contrast >  200.0f) { run_contrast =  200.0f; }
-        if(run_switch   <    0.5f) { run_switch   =    0.0f; }
-        else                       { run_switch   =    1.0f; }
+        if(run_switch   <    0.5f) { run_switch   =    0.0f; }   // 停（保留上一次的方案显示）
+        else if(run_switch < 1.5f) { run_switch   =    1.0f; run_line_mode = LINE_MODE_CONTRAST; }   // 对比度巡线
+        else                       { run_switch   =    2.0f; run_line_mode = LINE_MODE_OTSU;     }   // 分段大津法巡线
 
         MotorPID_SetGains(run_kp, run_ki, run_kd);
         Contrast_Ratio = run_contrast;

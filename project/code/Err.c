@@ -7,6 +7,7 @@
 
 extern volatile int   Left_Line[MT9V03X_H];
 extern volatile int   Right_Line[MT9V03X_H];
+extern volatile int   Road_Wide[MT9V03X_H];
 extern int            Left_Lost_Flag[MT9V03X_H];
 extern int            Right_Lost_Flag[MT9V03X_H];
 extern volatile int   Search_Stop_Line;
@@ -27,8 +28,9 @@ static uint8 zone_ok[MT9V03X_H];      // 每行能不能用
 
 static int   ln_farthest = 0;         // 看得见的最远行
 static int   ln_span     = 0;         // 可见行数
-static int   ln_far_end  = 0;         // 远块 / 中块分界
-static int   ln_mid_end  = 0;         // 中块 / 近块分界
+
+// 5 段权重：远 -> 近
+const float Err_ZoneWeight[ERR_SEGMENTS] = { 1.0f, 1.5f, 2.0f, 2.5f, 2.5f };
 
 static float err_filt_val  = 0.0f;    // 滤波值
 static uint8 err_filt_init = 0;       // 第一次直接赋值
@@ -76,8 +78,6 @@ static uint8 image_line_prepare(void)
 
     ln_farthest = farthest;
     ln_span     = span;
-    ln_far_end  = farthest + span / 3;
-    ln_mid_end  = farthest + (span * 2) / 3;
 
     for(row = farthest; row < MT9V03X_H; row++)
     {
@@ -113,44 +113,99 @@ static uint8 image_line_prepare(void)
 static uint8 err_zone(float *err_out)
 {
     int   row;
+    int   r2;
     int   z;
     int   v;
-    int   cnt[3];
-    float sum[3];
-    float w[3];
+    int   cnt[ERR_SEGMENTS];
+    float sum[ERR_SEGMENTS];
+    float wsum[ERR_SEGMENTS];
     float total_e = 0.0f;
     float total_w = 0.0f;
     float lateral;
 
-    cnt[0] = cnt[1] = cnt[2] = 0;
-    sum[0] = sum[1] = sum[2] = 0.0f;
+    for(z = 0; z < ERR_SEGMENTS; z++)
+    {
+        cnt[z]  = 0;
+        sum[z]  = 0.0f;
+        wsum[z] = 0.0f;
+    }
     ErrValidRows = 0;
 
     for(row = ln_farthest; row < MT9V03X_H; row++)
     {
+        float pos;
+        float kernel;
+        float conf;
+        float rw;
+        float e;
+
         if(0 == zone_ok[row]) { continue; }
 
-        if     (row < ln_far_end) { z = 0; }       /* 远块 */
-        else if(row < ln_mid_end) { z = 1; }       /* 中块 */
-        else                      { z = 2; }       /* 近块 */
+        /* ---------- 这一段属于哪一块（远 -> 近，共 ERR_SEGMENTS 块）---------- */
+        z = ((row - ln_farthest) * ERR_SEGMENTS) / ln_span;
+        if(z >= ERR_SEGMENTS) { z = ERR_SEGMENTS - 1; }
+
+        /* ---------- 段内三角核：段中心权重 1.0，段边界 0.5 ---------- */
+        pos = ((float)((row - ln_farthest) * ERR_SEGMENTS) / (float)ln_span) - (float)z;
+        kernel = 1.0f;
+#if ERR_USE_ROW_KERNEL
+        {
+            float d = pos - 0.5f;
+            if(d < 0.0f) { d = -d; }
+            kernel = 1.0f - d;
+        }
+#endif
+
+        /* ---------- 宽度一致性：和附近 5 行平均宽度差太多的行降权 ---------- */
+        conf = 1.0f;
+#if ERR_USE_WIDTH_CONF
+        {
+            int sw = 0;
+            int cw = 0;
+            int r0 = row - 2;
+            int r1 = row + 2;
+
+            if(r0 < ln_farthest) { r0 = ln_farthest; }
+            if(r1 >= MT9V03X_H)  { r1 = MT9V03X_H - 1; }
+
+            for(r2 = r0; r2 <= r1; r2++)
+            {
+                if(0 == zone_ok[r2]) { continue; }
+                sw += Road_Wide[r2];
+                cw++;
+            }
+
+            if(cw > 0)
+            {
+                float avg = (float)sw / (float)cw;
+                float d   = (float)Road_Wide[row] - avg;
+
+                if(d < 0.0f) { d = -d; }
+                conf = 1.0f / (1.0f + d / 20.0f);
+                if(conf < 0.25f) { conf = 0.25f; }
+            }
+        }
+#endif
 
         v = zone_mid[row];
-        sum[z] += (float)((MT9V03X_W / 2) - v);
+        e  = (float)((MT9V03X_W / 2) - v);
+        rw = kernel * conf;
+
+        sum[z]  += rw * e;
+        wsum[z] += rw;
         cnt[z]++;
         ErrValidRows++;
     }
 
-    w[0] = ZONE_W_FAR;
-    w[1] = ZONE_W_MID;
-    w[2] = ZONE_W_NEAR;
-
-    for(z = 0; z < 3; z++)
+    /* ---------- 每块取加权平均，再按段权重合成 ---------- */
+    for(z = 0; z < ERR_SEGMENTS; z++)
     {
-        if(cnt[z] < ZONE_MIN_ROWS) { continue; }
-        if(w[z] <= 0.001f)         { continue; }
+        if(cnt[z] < ZONE_MIN_ROWS)      { continue; }
+        if(wsum[z] < 0.001f)            { continue; }
+        if(Err_ZoneWeight[z] <= 0.001f) { continue; }
 
-        total_e += w[z] * (sum[z] / (float)cnt[z]);
-        total_w += w[z];
+        total_e += Err_ZoneWeight[z] * (sum[z] / wsum[z]);
+        total_w += Err_ZoneWeight[z];
     }
 
     if(total_w < 0.001f) { return 0; }

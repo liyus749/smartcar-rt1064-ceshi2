@@ -18,12 +18,18 @@
 #define ERR_BIAS             (0.0f)    // 直道零点偏置：如果直道正中显示 Err=-10，就把这里设成 -10
 #define ERR_D_LIMIT          (20.0f)   // D 项偏差变化量限幅（像素/帧）
 
-#define ZONE_W_FAR           (1.0f)    // 远块权重
-#define ZONE_W_MID           (2.0f)    // 中块权重
-#define ZONE_W_NEAR          (2.0f)    // 近块权重
-#define ZONE_MIN_ROWS        (3)       // 一块至少几行有效数据才算数
+#define ERR_SEGMENTS         (5)       // 可见赛道分成几段（远 -> 近）
+#define ZONE_MIN_ROWS        (2)       // 每段至少几行有效数据才算数
 #define ERR_SPIKE_LIMIT      (15)      // 孤立假点判定阈值（像素）
 #define ERR_MIN_SPAN         (9)       // 可见行数少于这个，这一帧不算
+
+// 每段权重：远 -> 近。默认 {1.0, 1.5, 2.0, 2.5, 2.5}
+//   越靠近车头的行越可信，所以权重更大；远处仍保留 1.0，保证入弯能提前看到趋势。
+//   想让车更"看远"：把前面几段调大；想让车更稳、更贴脚下：把后面几段调大。
+extern const float Err_ZoneWeight[ERR_SEGMENTS];
+
+#define ERR_USE_ROW_KERNEL   (1)       // 1 = 段内中间行权重更高（三角核，减弱分段边界跳变）
+#define ERR_USE_WIDTH_CONF   (1)       // 1 = 赛道宽度突变的行降权（抑制误检边线）
 
 //==============================================================================================
 
