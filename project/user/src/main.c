@@ -310,6 +310,7 @@ static void Frame_Process(void)
 #if USE_SCREEN
     /* 5. 屏幕 */
     Screen_ShowFrame(mt9v03x_image[0], image_two_value[0], line_left, line_mid, line_right);
+    Screen_ShowRefCol(Contrast_GetReferenceCol());
     Screen_ShowStatus(Err, Island_State, (int)MotorPID_GetTarget());
     Screen_ShowParam((int)run_switch, dbg_duty, (int)MotorPID_GetTarget(), (int)MotorPID_GetMeasured());
 #endif
