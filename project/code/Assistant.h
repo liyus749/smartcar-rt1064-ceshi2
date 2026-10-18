@@ -10,15 +10,17 @@
 *
 *   上位机：逐飞助手 V2.0，连接方式选"无线转串口"（选无线模块那个 COM 口）
 *
-* ================================ 8 个参数通道（助手 UI 通道 0~7）================================
+* ================================ 4 个参数通道（助手 UI 通道 0~3）================================
 *   通道 0 = 目标速度     (编码器计数/10ms，0~500)
-*   通道 1 = 电机 P
-*   通道 2 = 电机 I
-*   通道 3 = 电机 D
-*   通道 4 = 舵机 P
-*   通道 5 = 舵机 D
-*   通道 6 = 对比度阈值   (x200 尺度，0~200，默认 50)
-*   通道 7 = 模式/开关    (0=停, 1=对比度巡线, 2=分段大津法巡线)
+*   通道 1 = 舵机 P
+*   通道 2 = 舵机 D
+*   通道 3 = 电机开关     (0=停, 1=跑)
+*
+*   其余参数都在工程里改，重新编译即可：
+*       电机 P/I/D      -> MotorPID.h   MOTORPID_DEFAULT_KP / KI / KD
+*       对比度阈值      -> Contrast.h   CONTRAST_RATIO_DEFAULT
+*       巡线方案        -> LineDetect.h LINE_SCHEME
+*       大津法阈值偏置  -> LineDetect.h OTSU_BIAS
 *
 * ================================ 8 条波形 ================================
 *   1 = ErrUse   滤波后图像偏差（调舵机 PD 主要看它）
@@ -49,12 +51,8 @@
 typedef enum
 {
     ASST_PARAM_SPEED = 0,        // 目标速度
-    ASST_PARAM_MOTOR_KP,         // 电机 P
-    ASST_PARAM_MOTOR_KI,         // 电机 I
-    ASST_PARAM_MOTOR_KD,         // 电机 D
     ASST_PARAM_SERVO_P,          // 舵机 P
     ASST_PARAM_SERVO_D,          // 舵机 D
-    ASST_PARAM_CONTRAST,         // 对比度阈值
     ASST_PARAM_SWITCH,           // 电机开关
 } assistant_param_enum;
 

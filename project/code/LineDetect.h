@@ -25,6 +25,12 @@
 #define LINE_MODE_CONTRAST      (0)
 #define LINE_MODE_OTSU          (1)
 
+// ★★ 巡线方案选择（改这里，重新编译即可，不再经过逐飞助手）★★
+//   想用哪一套就改这一行：
+//       LINE_MODE_CONTRAST  = 对比度巡线（当前这版）
+//       LINE_MODE_OTSU      = 分段大津法巡线（以前那版）
+#define LINE_SCHEME             (LINE_MODE_CONTRAST)
+
 //==================================== 分段大津法参数 ====================================
 
 #define OTSU_BANDS              (4)         // 100 行分成 4 段，每段自己算大津法
