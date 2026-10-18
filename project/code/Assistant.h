@@ -10,17 +10,19 @@
 *
 *   上位机：逐飞助手 V2.0，连接方式选"无线转串口"（选无线模块那个 COM 口）
 *
-* ================================ 4 个参数通道（助手 UI 通道 0~3）================================
+* ================================ 8 个参数通道（助手 UI 通道 0~7）================================
 *   通道 0 = 目标速度     (编码器计数/10ms，0~500)
-*   通道 1 = 舵机 P
-*   通道 2 = 舵机 D
-*   通道 3 = 电机开关     (0=停, 1=跑)
+*   通道 1 = 电机 P
+*   通道 2 = 电机 I
+*   通道 3 = 电机 D
+*   通道 4 = 舵机 P
+*   通道 5 = 舵机 D
+*   通道 6 = 阈值（含义随巡线方案变化）
+*            对比度巡线：对比度阈值（0~200，默认 50）
+*            分段大津法：大津法阈值偏移量（可正可负，默认 15）
+*   通道 7 = 电机开关     (0=停, 1=跑)
 *
-*   其余参数都在工程里改，重新编译即可：
-*       电机 P/I/D      -> MotorPID.h   MOTORPID_DEFAULT_KP / KI / KD
-*       对比度阈值      -> Contrast.h   CONTRAST_RATIO_DEFAULT
-*       巡线方案        -> LineDetect.h LINE_SCHEME
-*       大津法阈值偏置  -> LineDetect.h OTSU_BIAS
+*   巡线方案在 LineDetect.h 的 LINE_SCHEME 里改，重新编译即可。
 *
 * ================================ 8 条波形 ================================
 *   1 = ErrUse   滤波后图像偏差（调舵机 PD 主要看它）
@@ -51,8 +53,12 @@
 typedef enum
 {
     ASST_PARAM_SPEED = 0,        // 目标速度
+    ASST_PARAM_MOTOR_KP,         // 电机 P
+    ASST_PARAM_MOTOR_KI,         // 电机 I
+    ASST_PARAM_MOTOR_KD,         // 电机 D
     ASST_PARAM_SERVO_P,          // 舵机 P
     ASST_PARAM_SERVO_D,          // 舵机 D
+    ASST_PARAM_CONTRAST,         // 通道 6：对比度阈值 / 大津法偏移量
     ASST_PARAM_SWITCH,           // 电机开关
 } assistant_param_enum;
 
@@ -89,5 +95,15 @@ uint8 Assistant_GetUpdated(assistant_param_enum ch);
 // 函数简介     清掉"有新值"标志
 //-------------------------------------------------------------------------------------------------------------------
 void Assistant_ClearUpdated(assistant_param_enum ch);
+
+//-------------------------------------------------------------------------------------------------------------------
+// 函数简介     单片机收到的参数统计（给屏幕显示"参数有没有下传"）
+// 返回参数     RxCount      成功收到的参数总条数（只涨不跌）
+//              LastChannel  最近一条参数的通道号（0~7）
+//              LastValue    最近一条参数的数值
+//-------------------------------------------------------------------------------------------------------------------
+uint32 Assistant_GetRxCount(void);
+uint8  Assistant_GetLastChannel(void);
+float  Assistant_GetLastValue(void);
 
 #endif

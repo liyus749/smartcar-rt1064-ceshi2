@@ -29,6 +29,7 @@ static uint8  th_band[OTSU_BANDS];
 
 static uint8  g_mode    = LINE_MODE_CONTRAST;
 static uint8  g_ref_col = MT9V03X_W / 2;
+static volatile int g_otsu_bias = OTSU_BIAS_DEFAULT;
 
 //===================================================================================================================
 //  分段大津法
@@ -131,7 +132,7 @@ static void Threshold_And_Binarize(void)
             }
             th_smooth[b] += OTSU_SMOOTH_K * (otsu - th_smooth[b]);
 
-            th = (int)th_smooth[b] + OTSU_BIAS;
+            th = (int)th_smooth[b] + g_otsu_bias;
             if(th > 255) { th = 255; }
             if(th < 1)   { th = 1;   }
             th_band[b] = (uint8)th;
@@ -381,6 +382,7 @@ void LineDetect_Init(void)
 
     g_mode    = LINE_MODE_CONTRAST;
     g_ref_col = MT9V03X_W / 2;
+    g_otsu_bias = OTSU_BIAS_DEFAULT;
 }
 
 void LineDetect_Process(const uint8 *image, uint8 mode)
@@ -429,4 +431,16 @@ uint8 LineDetect_GetRefCol(void)
 uint8 LineDetect_GetMode(void)
 {
     return g_mode;
+}
+
+void LineDetect_SetOtsuBias(int bias)
+{
+    if(bias < -100) { bias = -100; }
+    if(bias >  100) { bias =  100; }
+    g_otsu_bias = bias;
+}
+
+int LineDetect_GetOtsuBias(void)
+{
+    return g_otsu_bias;
 }

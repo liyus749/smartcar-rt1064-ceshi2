@@ -20,7 +20,8 @@
 *   图像窗口：能看到 188x100 灰度图（约 2~3 帧/秒，无线串口带宽有限）
 *   波形 8 条：ErrUse / 舵机打角 / 左轮 / 右轮 / 目标速度 / 实测速度 / 输出占空比 / 视野长度
 *   参数 8 个（助手 UI 通道 0~7）：
-*      0 目标速度    1 舵机P   2 舵机D   3 电机开关（0=停，1=跑）
+*      0 目标速度  1 电机P  2 电机I  3 电机D  4 舵机P  5 舵机D  6 阈值  7 电机开关
+*      通道6：对比度方案 = 对比度阈值；大津法方案 = 阈值偏移量
 *   巡线方案在 LineDetect.h 的 LINE_SCHEME 里改，重新编译即可
 *
 * ================================ B9 蓝灯灯语 ================================
@@ -104,8 +105,12 @@ extern void           Island_Detect(void);
 
 // 可在线调参数（主循环从助手写进来，中断里读）
 static volatile float run_speed    = SPEED_DEFAULT;
+static volatile float run_kp       = SPEED_KP_DEFAULT;
+static volatile float run_ki       = SPEED_KI_DEFAULT;
+static volatile float run_kd       = SPEED_KD_DEFAULT;
 static volatile float run_p        = SERVO_P_DEFAULT;
 static volatile float run_d        = SERVO_D_DEFAULT;
+static volatile float run_threshold = CONTRAST_RATIO_DEFAULT;
 static volatile float run_switch   = (float)RUN_AUTO_START;
 static volatile float run_enable   = 0.0f;                 // 初始化完成后置 1，允许跑
 
@@ -327,6 +332,7 @@ static void Frame_Process(void)
     Screen_ShowLineMode((int)line_mode);
     Screen_ShowStatus(Err, Island_State, (int)MotorPID_GetTarget());
     Screen_ShowParam((int)run_switch, dbg_duty, (int)MotorPID_GetTarget(), (int)MotorPID_GetMeasured());
+    Screen_ShowParamRx(Assistant_GetRxCount(), Assistant_GetLastChannel(), Assistant_GetLastValue());
 #endif
 
     /* 6. 发波形 + 边线 + 图像给逐飞助手 */
@@ -446,19 +452,43 @@ int main(void)
 
         /* 2. 把新参数搬进全局变量（中断里读的就是这些）*/
         if(Assistant_GetUpdated(ASST_PARAM_SPEED))   { Assistant_ClearUpdated(ASST_PARAM_SPEED);   run_speed  = Assistant_GetParam(ASST_PARAM_SPEED); }
+        if(Assistant_GetUpdated(ASST_PARAM_MOTOR_KP)){ Assistant_ClearUpdated(ASST_PARAM_MOTOR_KP);run_kp     = Assistant_GetParam(ASST_PARAM_MOTOR_KP); }
+        if(Assistant_GetUpdated(ASST_PARAM_MOTOR_KI)){ Assistant_ClearUpdated(ASST_PARAM_MOTOR_KI);run_ki     = Assistant_GetParam(ASST_PARAM_MOTOR_KI); }
+        if(Assistant_GetUpdated(ASST_PARAM_MOTOR_KD)){ Assistant_ClearUpdated(ASST_PARAM_MOTOR_KD);run_kd     = Assistant_GetParam(ASST_PARAM_MOTOR_KD); }
         if(Assistant_GetUpdated(ASST_PARAM_SERVO_P)) { Assistant_ClearUpdated(ASST_PARAM_SERVO_P); run_p      = Assistant_GetParam(ASST_PARAM_SERVO_P); }
         if(Assistant_GetUpdated(ASST_PARAM_SERVO_D)) { Assistant_ClearUpdated(ASST_PARAM_SERVO_D); run_d      = Assistant_GetParam(ASST_PARAM_SERVO_D); }
+        if(Assistant_GetUpdated(ASST_PARAM_CONTRAST)){ Assistant_ClearUpdated(ASST_PARAM_CONTRAST);run_threshold = Assistant_GetParam(ASST_PARAM_CONTRAST); }
         if(Assistant_GetUpdated(ASST_PARAM_SWITCH))  { Assistant_ClearUpdated(ASST_PARAM_SWITCH);  run_switch = Assistant_GetParam(ASST_PARAM_SWITCH); }
 
         /* 3. 限幅 */
         if(run_speed  <   0.0f) { run_speed  =   0.0f; }
         if(run_speed  > 500.0f) { run_speed  = 500.0f; }
+        if(run_kp     <   0.0f) { run_kp     =   0.0f; }
+        if(run_kp     >  50.0f) { run_kp     =  50.0f; }
+        if(run_ki     <   0.0f) { run_ki     =   0.0f; }
+        if(run_ki     >   2.0f) { run_ki     =   2.0f; }
+        if(run_kd     <   0.0f) { run_kd     =   0.0f; }
+        if(run_kd     >  20.0f) { run_kd     =  20.0f; }
         if(run_p      <   0.0f) { run_p      =   0.0f; }
         if(run_p      >  20.0f) { run_p      =  20.0f; }
         if(run_d      <   0.0f) { run_d      =   0.0f; }
         if(run_d      >  50.0f) { run_d      =  50.0f; }
+        if(run_threshold < -50.0f) { run_threshold = -50.0f; }
+        if(run_threshold > 200.0f) { run_threshold = 200.0f; }
         if(run_switch <   0.5f) { run_switch =   0.0f; }
         else                    { run_switch =   1.0f; }
+
+        MotorPID_SetGains(run_kp, run_ki, run_kd);
+
+        /* 通道 6 的含义随巡线方案变化 */
+        if(LINE_SCHEME == LINE_MODE_OTSU)
+        {
+            LineDetect_SetOtsuBias((int)run_threshold);     /* 大津法：阈值偏移量 */
+        }
+        else
+        {
+            Contrast_Ratio = run_threshold;                 /* 对比度：对比度阈值 */
+        }
 
         /* 4. 摄像头出一帧 -> 处理 */
         if(mt9v03x_finish_flag)

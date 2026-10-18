@@ -29,6 +29,10 @@ static uint8  g_image_copy[MT9V03X_W * MT9V03X_H];                          // �
 
 static uint8  g_image_div = 0;                                              // 图像分频计数
 
+static uint32 g_rx_count  = 0;                                              // 收到的参数总条数
+static uint8  g_last_ch   = 0;                                              // 最近一条参数的通道
+static float  g_last_val  = 0.0f;                                           // 最近一条参数的值
+
 // 边线颜色（RGB565）
 #define ASST_COLOR_LEFT     (0x001F)   // 蓝
 #define ASST_COLOR_RIGHT    (0xF800)   // 红
@@ -80,6 +84,9 @@ uint8 Assistant_Init(void)
     }
 
     g_image_div = 0;
+    g_rx_count  = 0;
+    g_last_ch   = 0;
+    g_last_val  = 0.0f;
     return 0;
 }
 
@@ -88,7 +95,20 @@ uint8 Assistant_Init(void)
 //-------------------------------------------------------------------------------------------------------------------
 void Assistant_Poll(void)
 {
+    uint8 i;
+
     seekfree_assistant_debug_param_analysis(&g_param);
+
+    /* 记下这一次收到了哪些通道（主循环随后会清 update_flag）*/
+    for(i = 0; i < SEEKFREE_ASSISTANT_DEBUG_PARAM_MAX; i++)
+    {
+        if(g_param.update_flag[i])
+        {
+            g_rx_count++;
+            g_last_ch  = i;
+            g_last_val = g_param.data[i];
+        }
+    }
 }
 
 //-------------------------------------------------------------------------------------------------------------------
@@ -173,4 +193,22 @@ void Assistant_ClearUpdated(assistant_param_enum ch)
     {
         g_param.update_flag[ch] = 0;
     }
+}
+
+//-------------------------------------------------------------------------------------------------------------------
+// 函数简介     读取收到的参数统计
+//-------------------------------------------------------------------------------------------------------------------
+uint32 Assistant_GetRxCount(void)
+{
+    return g_rx_count;
+}
+
+uint8 Assistant_GetLastChannel(void)
+{
+    return g_last_ch;
+}
+
+float Assistant_GetLastValue(void)
+{
+    return g_last_val;
 }
