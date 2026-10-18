@@ -43,11 +43,17 @@
 #define ASSISTANT_OSC_CH_MAX       (8)      // 波形通道数
 #define ASSISTANT_IMAGE_DIV        (4)      // 每几帧发一次图像（1=每帧，4=每4帧，更流畅的波形）
 
-// ★ 隔离测试开关（用来判断助手示波器是不是被图像/边线大包干扰）
-//   1 = 发；0 = 不发
-//   先设成 0/0 只发波形，确认波形能出来；确认后再改回 1/1
-#define ASSISTANT_SEND_IMAGE       (1)
-#define ASSISTANT_SEND_BOUNDARY    (1)
+// ★ 助手只发波形（图像/边线在本地屏幕看）
+//   原因：逐飞助手的波形解析器要求每个波形包单独成帧（官方例程就是单独发、包间留间隔）。
+//         如果和 18800 字节的图像大包连续粘在一起发，解析器读到的数据块不是从 0xAA 开始，
+//         就会一直报"未找到有效帧头"。
+//   如果以后确实要助手也收图像，把下面改成 1，但波形可能会被大包打断。
+#define ASSISTANT_SEND_IMAGE       (0)
+#define ASSISTANT_SEND_BOUNDARY    (0)
+
+// 波形包之间的间隔（毫秒）。官方例程是 50ms（20Hz）；这里用 20ms（50Hz），
+// 既能让每个波形包单独成帧，又能保证波形刷新够快。
+#define ASSISTANT_OSC_GAP_MS       (20)
 
 // 参数通道号（和上面注释一一对应）
 typedef enum
