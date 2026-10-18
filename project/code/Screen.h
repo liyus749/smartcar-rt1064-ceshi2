@@ -86,29 +86,24 @@ void Screen_ShowFrame(const uint8 *gray, const uint8 *bin,
 // 函数简介     在图像下方显示状态（每帧调，开销很小）
 // 参数说明     err         图像偏差 Err
 // 参数说明     state       环岛状态（不用环岛就传 0）
-// 参数说明     duty        电机占空比设定值（V1）
-// 参数说明     cross       十字路口标志（0 = 没有，1 = 正在过十字）
-// 使用示例     Screen_ShowStatus(Err, Island_State, (int)run_speed, cross_flag);
+// 参数说明     target      电机目标速度（编码器计数/10ms）
+// 使用示例     Screen_ShowStatus(Err, Island_State, (int)MotorPID_GetTarget());
 //-------------------------------------------------------------------------------------------------------------------
-void Screen_ShowStatus(float err, int state, int duty, int cross);
+void Screen_ShowStatus(float err, int state, int target);
 
 //-------------------------------------------------------------------------------------------------------------------
-// 函数简介     显示"参数下行"的诊断信息（电机开关状态 + 实际输出 + 收到多少字节 + 收到几条参数）
-// 参数说明     sw          电机开关状态（0 = 停，1 = 跑）        —— 就是 run_switch
-// 参数说明     out_duty    中断里真正写进电机的占空比            —— 就是 dbg_duty
-// 参数说明     rx_bytes    从电脑收到的总字节数（只涨不跌）      —— 就是 Vofa_RxBytes
-// 参数说明     cmd_ok      成功解析出的参数条数（只涨不跌）      —— 就是 Vofa_CmdOk
-// 返回参数     void
-// 使用示例     Screen_ShowParam((int)run_switch, dbg_duty, Vofa_RxBytes, Vofa_CmdOk);
+// 函数简介     显示电机状态（开关 + 输出占空比 + 目标速度 + 实测速度）
+// 参数说明     sw          电机开关状态（0 = 停，1 = 跑）
+// 参数说明     out_duty    中断里真正写进电机的占空比
+// 参数说明     target      目标速度（编码器计数/10ms）
+// 参数说明     actual      实测速度（编码器计数/10ms）
+// 使用示例     Screen_ShowParam(sw, dbg_duty, (int)MotorPID_GetTarget(), (int)MotorPID_GetMeasured());
 //
-// 备注信息     ★ 拖 VOFA 滑动条的时候，看屏幕上这两行：
-//                Duty 跟着变 + Out 也跟着变  -> 参数进来了，而且真的用到电机上了
-//                Duty 变、Out 不变          -> 参数根本没过进来（屏幕上那个数字是上电默认值）
-//                Sw 一直是 1                -> 电机开关那条命令没进来
-//                rx 不动                    -> 电脑压根没往单片机发东西
-//                rx 在涨、ok 不动           -> 发出去了，但命令内容单片机认不出来
+// 备注信息     ★ 在助手调速度时看这两行：
+//                Tgt 跟着滑动条变 + Act 也跟着变 -> 速度环工作正常
+//                Tgt 变、Act 不动             -> 参数没进来，或电机/编码器有问题
 //-------------------------------------------------------------------------------------------------------------------
-void Screen_ShowParam(int sw, int out_duty, uint32 rx_bytes, uint32 cmd_ok);
+void Screen_ShowParam(int sw, int out_duty, int target, int actual);
 
 //-------------------------------------------------------------------------------------------------------------------
 // 函数简介     在图像上画两条黄色横虚线（标出"远 / 中 / 近"三个分块的分界）

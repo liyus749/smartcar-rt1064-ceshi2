@@ -456,14 +456,64 @@
               <FilePath>..\code\Screen.h</FilePath>
             </File>
             <File>
-              <FileName>Vofa.c</FileName>
+              <FileName>Contrast.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\code\Vofa.c</FilePath>
+              <FilePath>..\code\Contrast.c</FilePath>
             </File>
             <File>
-              <FileName>Vofa.h</FileName>
+              <FileName>Contrast.h</FileName>
               <FileType>5</FileType>
-              <FilePath>..\code\Vofa.h</FilePath>
+              <FilePath>..\code\Contrast.h</FilePath>
+            </File>
+            <File>
+              <FileName>Err.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\code\Err.c</FilePath>
+            </File>
+            <File>
+              <FileName>Err.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\code\Err.h</FilePath>
+            </File>
+            <File>
+              <FileName>MotorPID.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\code\MotorPID.c</FilePath>
+            </File>
+            <File>
+              <FileName>MotorPID.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\code\MotorPID.h</FilePath>
+            </File>
+            <File>
+              <FileName>Assistant.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\code\Assistant.c</FilePath>
+            </File>
+            <File>
+              <FileName>Assistant.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\code\Assistant.h</FilePath>
+            </File>
+            <File>
+              <FileName>seekfree_assistant.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\code\seekfree_assistant.c</FilePath>
+            </File>
+            <File>
+              <FileName>seekfree_assistant.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\code\seekfree_assistant.h</FilePath>
+            </File>
+            <File>
+              <FileName>seekfree_assistant_interface.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\code\seekfree_assistant_interface.c</FilePath>
+            </File>
+            <File>
+              <FileName>seekfree_assistant_interface.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\code\seekfree_assistant_interface.h</FilePath>
             </File>
             <File>
               <FileName>GYRO.c</FileName>

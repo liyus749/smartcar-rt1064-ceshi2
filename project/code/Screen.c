@@ -96,10 +96,10 @@ void Screen_ShowFrame(const uint8 *gray, const uint8 *bin,
 }
 
 //-------------------------------------------------------------------------------------------------------------------
-// 函数简介     显示状态文字（Err / 环岛状态 / 十字标志 / 占空比）
+// 函数简介     显示状态文字（Err / 环岛状态 / 电机目标速度）
 // 备注信息     文字写在图像下方，和图像区域不重叠，所以每帧调用也不会闪
 //-------------------------------------------------------------------------------------------------------------------
-void Screen_ShowStatus(float err, int state, int duty, int cross)
+void Screen_ShowStatus(float err, int state, int target)
 {
     /* ★ Err 的整数位数给 3 位（原来是 2 位）。
        逐飞这个 show_float 的实现是"整数部分按 num 位取模"，
@@ -111,27 +111,23 @@ void Screen_ShowStatus(float err, int state, int duty, int cross)
     ips200_show_string(0,  SCR_TXT_Y + 16,  "Isl ");
     ips200_show_int   (40, SCR_TXT_Y + 16,  state, 2);
 
-    ips200_show_string(80, SCR_TXT_Y + 16,  "Cr ");
-    ips200_show_int   (112, SCR_TXT_Y + 16, cross, 1);
-
-    ips200_show_string(0,  SCR_TXT_Y + 32,  "Spd ");    /* 电机占空比设定值（V1）*/
-    ips200_show_int   (40, SCR_TXT_Y + 32,  duty, 4);
+    ips200_show_string(0,  SCR_TXT_Y + 32,  "Tgt ");    /* 电机目标速度（编码器计数/10ms）*/
+    ips200_show_int   (40, SCR_TXT_Y + 32,  target, 4);
 }
 
 //-------------------------------------------------------------------------------------------------------------------
-// 函数简介     显示"参数下行"的诊断信息（第 4、5 行）
+// 函数简介     显示电机状态（第 4、5 行）
 //
 //   屏幕布局（图像下面）：
 //       Err  x.x        （Screen_ShowStatus 画的第 1 行）
 //       Isl  x          （第 2 行）
-//       Duty 1000       （第 3 行）—— 你拖 V1 滑动条，这个数必须跟着变
-//       Sw 1   Out 1000 （第 4 行）★ Sw = 开关状态，Out = 中断里真正写进电机的占空比
-//       rx 1234 ok 5    （第 5 行）★ rx = 电脑发来的字节数，ok = 成功收到的参数条数
+//       Tgt 150         （第 3 行）—— 目标速度，拖滑动条这个数必须跟着变
+//       Sw 1   Out 1000 （第 4 行）★ Sw = 开关状态，Out = 真正写进电机的占空比
+//       Act 143         （第 5 行）★ 实测速度，Tgt/Act 对上说明速度环工作正常
 //
-//   ★ 为什么要看 Out：屏幕上原来的 Duty 只是"设定值"，Out 才是"真的用到电机上的值"。
-//     两个都对上，才叫参数真的控制到电机了。
+//   ★ Tgt 变、Act 不动 -> 参数没进来，或电机/编码器有问题。
 //-------------------------------------------------------------------------------------------------------------------
-void Screen_ShowParam(int sw, int out_duty, uint32 rx_bytes, uint32 cmd_ok)
+void Screen_ShowParam(int sw, int out_duty, int target, int actual)
 {
     ips200_show_string(0,   SCR_TXT_Y + 48, "Sw ");
     ips200_show_int   (24,  SCR_TXT_Y + 48, (int32)sw, 1);
@@ -139,11 +135,8 @@ void Screen_ShowParam(int sw, int out_duty, uint32 rx_bytes, uint32 cmd_ok)
     ips200_show_string(64,  SCR_TXT_Y + 48, "Out");
     ips200_show_int   (104, SCR_TXT_Y + 48, (int32)out_duty, 4);
 
-    ips200_show_string(0,   SCR_TXT_Y + 64, "rx ");
-    ips200_show_int   (24,  SCR_TXT_Y + 64, (int32)rx_bytes, 6);
-
-    ips200_show_string(120, SCR_TXT_Y + 64, "ok");
-    ips200_show_int   (144, SCR_TXT_Y + 64, (int32)cmd_ok, 5);
+    ips200_show_string(0,   SCR_TXT_Y + 64, "Act");
+    ips200_show_int   (24,  SCR_TXT_Y + 64, (int32)actual, 4);
 }
 
 //-------------------------------------------------------------------------------------------------------------------
