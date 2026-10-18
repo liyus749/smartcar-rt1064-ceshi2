@@ -115,8 +115,22 @@ int MotorPID_Update(int enc_l, int enc_r)
         return 0;
     }
 
-    /* 反馈：左右轮平均（编码器计数/10ms）*/
-    g_measured = ((float)enc_l + (float)enc_r) * 0.5f;
+    /* 反馈：左右轮编码器计数的【绝对值】平均（编码器计数/10ms）。
+
+       ★ 为什么必须取绝对值：
+         电机只允许正转（输出 0~4000），所以"轮子转多快"只看计数绝对值就够了。
+         以前直接用 (enc_l + enc_r)/2，一旦某个编码器方向接反、或者两个编码器
+         符号相反，反馈就会变成 0 甚至负数 —— PID 以为"车根本没动"，就不断
+         加大输出直到满速，表现就是"一开就转最大速度、调速度参数没用"。
+         取绝对值之后，车越快反馈越大，误差变小，输出自然会稳在目标速度附近，
+         编码器方向反了也不会再正反馈。 */
+    {
+        float ml = (float)enc_l;
+        float mr = (float)enc_r;
+        if(ml < 0.0f) { ml = -ml; }
+        if(mr < 0.0f) { mr = -mr; }
+        g_measured = (ml + mr) * 0.5f;
+    }
 
     /* 软启动：目标速度从 0 慢慢爬到设定值（RAMP_MS 内到满）*/
     if(g_cur_target < g_target)
