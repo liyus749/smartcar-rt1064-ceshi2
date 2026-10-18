@@ -111,6 +111,7 @@ void Assistant_SendFrame(const uint8 *gray, const uint8 *left, const uint8 *righ
     }
 
     /* 2. 左右边线（叠加在图像上）*/
+#if ASSISTANT_SEND_BOUNDARY
     if((NULL != left) && (NULL != right))
     {
         for(i = 0; i < MT9V03X_H; i++)
@@ -123,8 +124,10 @@ void Assistant_SendFrame(const uint8 *gray, const uint8 *left, const uint8 *righ
         seekfree_assistant_camera_boundary_send(&g_boundary_left);
         seekfree_assistant_camera_boundary_send(&g_boundary_right);
     }
+#endif
 
     /* 3. 图像（大包，分频 + RTS 空闲才发）*/
+#if ASSISTANT_SEND_IMAGE
     if(NULL != gray)
     {
         g_image_div++;
@@ -140,6 +143,7 @@ void Assistant_SendFrame(const uint8 *gray, const uint8 *left, const uint8 *righ
             }
         }
     }
+#endif
 }
 
 //-------------------------------------------------------------------------------------------------------------------
