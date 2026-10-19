@@ -43,7 +43,7 @@
 #define SCREEN_SHOW_BINARY      (1)
 
 // 每几帧刷一次屏幕：1 = 每帧都刷（最流畅）  2/3 = 隔帧刷（省时间，觉得卡时改成 2）
-#define SCREEN_EVERY_N          (1)
+#define SCREEN_EVERY_N          (2)         // 每 2 帧刷一次屏，给控制回路省时间
 
 // 图像显示位置和大小（1:1 显示，不缩放）
 #define SCR_IMG_X               (0)

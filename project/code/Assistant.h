@@ -51,6 +51,9 @@
 #define ASSISTANT_SEND_IMAGE       (0)
 #define ASSISTANT_SEND_BOUNDARY    (0)
 
+// 1 = 发波形；0 = 不发（先把控制回路的时间省出来，参数接收不受影响）
+#define ASSISTANT_SEND_WAVE        (0)
+
 // 波形包之间的间隔（毫秒）。官方例程是 50ms（20Hz）；这里用 20ms（50Hz），
 // 既能让每个波形包单独成帧，又能保证波形刷新够快。
 #define ASSISTANT_OSC_GAP_MS       (20)

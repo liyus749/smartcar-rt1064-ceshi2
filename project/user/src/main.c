@@ -64,7 +64,7 @@
 #define CAM_EXPOSURE        (512)      // 摄像头曝光：发白/反光调小(400/350)，远处太暗调大(600+)
 
 // 舵机 PD 默认值（可在逐飞助手通道 4/5 在线改）
-#define SERVO_P_DEFAULT     (3.0f)
+#define SERVO_P_DEFAULT     (2.5f)
 #define SERVO_D_DEFAULT     (0.0f)
 
 // 电机速度环默认值（可在逐飞助手通道 0/1/2/3 在线改）
@@ -82,6 +82,12 @@
 
 // 舵机 PD 输出限幅（偏差再大也不会一把打死）
 #define SERVO_U_LIMIT       (120.0f)
+
+// 转向死区：|偏差| 小于这个值时直接当 0，防止直道被 ±1 像素噪声推着左右摆
+#define STEER_DEADBAND      (1.5f)
+
+// 大弯补偿：u += K * Err * |Err|。小误差几乎不变，大误差额外加一点，改善大弯转不过来
+#define STEER_QUAD_K        (0.03f)
 
 
 //===================================================================================================================
@@ -222,6 +228,7 @@ void pit_handler0(void)
     {
         float use_err;
         float u;
+        float d;
         float target = run_speed;
 
         MotorPID_SetEnable(1);
@@ -252,7 +259,21 @@ void pit_handler0(void)
             use_err = ErrUse;
         }
 
-        u = run_p * use_err + run_d * ErrDFrame;
+        /* 转向死区：直道上的小噪声不要推舵机 */
+        if((use_err > -STEER_DEADBAND) && (use_err < STEER_DEADBAND))
+        {
+            use_err = 0.0f;
+            d       = 0.0f;
+        }
+        else
+        {
+            d = ErrDFrame;
+        }
+
+        u = run_p * use_err + run_d * d;
+
+        /* 大弯补偿：小误差基本不变，大误差额外加一点 */
+        u += STEER_QUAD_K * use_err * ((use_err >= 0.0f) ? use_err : -use_err);
 
         if(u >  SERVO_U_LIMIT) { u =  SERVO_U_LIMIT; }
         if(u < -SERVO_U_LIMIT) { u = -SERVO_U_LIMIT; }

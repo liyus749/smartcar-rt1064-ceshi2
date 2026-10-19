@@ -118,6 +118,13 @@ void Assistant_SendFrame(const uint8 *gray, const uint8 *left, const uint8 *righ
 {
     uint8 i;
 
+    (void)gray;
+    (void)left;
+    (void)right;
+    (void)wave;
+    (void)i;
+
+#if ASSISTANT_SEND_WAVE
     /* 1. 波形（小包，先发）*/
     if(NULL != wave)
     {
@@ -147,6 +154,7 @@ void Assistant_SendFrame(const uint8 *gray, const uint8 *left, const uint8 *righ
         /* 包间留间隔：让助手把这一包当成独立的一帧收，帧头才会是 0xAA */
         system_delay_ms(ASSISTANT_OSC_GAP_MS);
     }
+#endif
 
     /* 2. 左右边线（叠加在图像上）*/
 #if ASSISTANT_SEND_BOUNDARY
