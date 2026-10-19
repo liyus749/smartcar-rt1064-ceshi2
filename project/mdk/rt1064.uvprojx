@@ -476,6 +476,16 @@
               <FilePath>..\code\LineDetect.h</FilePath>
             </File>
             <File>
+              <FileName>Cross.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\code\Cross.c</FilePath>
+            </File>
+            <File>
+              <FileName>Cross.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\code\Cross.h</FilePath>
+            </File>
+            <File>
               <FileName>Err.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\code\Err.c</FilePath>

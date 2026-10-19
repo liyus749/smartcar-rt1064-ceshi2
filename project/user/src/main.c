@@ -53,6 +53,7 @@
 #include "Assistant.h"
 #include "Contrast.h"
 #include "LineDetect.h"
+#include "Cross.h"
 #include "Err.h"
 
 
@@ -77,6 +78,7 @@
 #define USE_SCREEN          (1)        // 1 = 用屏幕显示图像+边线；0 = 不用
 #define USE_ISLAND          (1)        // 1 = 启用环岛识别；0 = 只巡线
 #define ISLAND_SLOW_RATIO   (0.6f)     // 进环岛后目标速度降到 60%
+#define CROSS_SLOW_RATIO    (0.7f)     // 过十字时目标速度降到 70%
 
 // 舵机 PD 输出限幅（偏差再大也不会一把打死）
 #define SERVO_U_LIMIT       (120.0f)
@@ -231,6 +233,11 @@ void pit_handler0(void)
             target *= ISLAND_SLOW_RATIO;
         }
 #endif
+        /* 过十字自动降速 */
+        if(Cross_Flag)
+        {
+            target *= CROSS_SLOW_RATIO;
+        }
         MotorPID_SetTarget(target);
         dbg_duty = MotorPID_Update(enc_l, enc_r);
 
@@ -289,8 +296,17 @@ static void Frame_Process(void)
     Island_Detect();
 #endif
 
+    /* 2.5 十字识别（环岛之后、算偏差之前）*/
+    Cross_Check();
+
     /* 3. 算偏差（内部做滤波和 D 项）*/
     Err_Compute();
+
+    /* 3.5 正在过十字：强制直行 */
+    if(Cross_Flag)
+    {
+        Err_ForceStraight();
+    }
 
     /* 4. 整理三条线给屏幕 + 助手边线（丢线时保持上一个值，避免线飞到边上）*/
     {
@@ -334,6 +350,7 @@ static void Frame_Process(void)
     Screen_ShowFrame(mt9v03x_image[0], image_two_value[0], line_left, line_mid, line_right);
     Screen_ShowRefCol(LineDetect_GetRefCol());
     Screen_ShowLineMode((int)line_mode);
+    Screen_ShowCross((int)Cross_Flag);
     Screen_ShowStatus(Err, Island_State, (int)MotorPID_GetTarget());
     Screen_ShowServoAngle((int)Servo_GetAngle());
     Screen_ShowParam((int)run_switch, dbg_duty, (int)MotorPID_GetTarget(), (int)MotorPID_GetMeasured());
@@ -381,6 +398,7 @@ int main(void)
     Contrast_Init();
     LineDetect_Init();
     Err_Init();
+    Cross_Init();
 
 #if USE_SCREEN
     Screen_Init();
