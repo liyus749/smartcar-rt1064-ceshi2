@@ -29,8 +29,8 @@ static uint8 zone_ok[MT9V03X_H];      // 每行能不能用
 static int   ln_farthest = 0;         // 看得见的最远行
 static int   ln_span     = 0;         // 可见行数
 
-// 5 段权重：远 -> 近
-const float Err_ZoneWeight[ERR_SEGMENTS] = { 1.0f, 1.5f, 2.0f, 2.5f, 2.5f };
+// 5 段权重：远 -> 近（远处权重调小，减少远端背景/噪声影响）
+const float Err_ZoneWeight[ERR_SEGMENTS] = { 0.5f, 1.0f, 2.0f, 2.5f, 2.5f };
 
 static float err_filt_val  = 0.0f;    // 滤波值
 static uint8 err_filt_init = 0;       // 第一次直接赋值
