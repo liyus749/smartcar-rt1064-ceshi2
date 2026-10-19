@@ -28,6 +28,10 @@
 
 extern int          Left_Lost_Flag[MT9V03X_H];
 extern int          Right_Lost_Flag[MT9V03X_H];
+extern volatile int Left_Line[MT9V03X_H];
+extern volatile int Right_Line[MT9V03X_H];
+extern volatile int Mid_Line[MT9V03X_H];
+extern volatile int Road_Wide[MT9V03X_H];
 extern volatile int Island_State;
 extern volatile int Left_Island_Flag;
 extern volatile int Right_Island_Flag;
@@ -35,6 +39,63 @@ extern volatile int Right_Island_Flag;
 static uint8   cross_confirm = 0;      // 连续满足条件的帧数
 static uint16  cross_hold    = 0;      // 确认后的保持帧数
 static volatile int cross_run_len = 0; // 当前两边都丢线的连续行数
+
+//-------------------------------------------------------------------------------------------------------------------
+// 函数简介     十字补线：把 top~bottom 这几行缺失的左右边线，用下方和上方的有效边线线性插值补出来
+// 参数说明     above_row   上方最近的有效行（远）
+// 参数说明     below_row   下方最近的有效行（近）
+// 参数说明     top/bottom  要补的连续行范围
+//-------------------------------------------------------------------------------------------------------------------
+static void Cross_FillLines(int above_row, int below_row, int top, int bottom)
+{
+    int i;
+    int lb = Left_Line[below_row];
+    int rb = Right_Line[below_row];
+    int la = Left_Line[above_row];
+    int ra = Right_Line[above_row];
+    float den = (float)(below_row - above_row);
+
+    if(den < 1.0f) { return; }
+
+    for(i = top; i <= bottom; i++)
+    {
+        float t = ((float)(below_row - i)) / den;
+        int l = (int)((float)lb + ((float)(la - lb)) * t);
+        int r = (int)((float)rb + ((float)(ra - rb)) * t);
+
+        if(l < 0)             { l = 0; }
+        if(l > MT9V03X_W - 1) { l = MT9V03X_W - 1; }
+        if(r < 0)             { r = 0; }
+        if(r > MT9V03X_W - 1) { r = MT9V03X_W - 1; }
+
+        Left_Line[i]       = l;
+        Right_Line[i]      = r;
+        Left_Lost_Flag[i]  = 0;
+        Right_Lost_Flag[i] = 0;
+        Mid_Line[i]        = (l + r) >> 1;
+        Road_Wide[i]       = r - l;
+    }
+}
+
+//-------------------------------------------------------------------------------------------------------------------
+// 函数简介     上方找不到有效赛道时，用下方最近的有效边线竖直延伸，把缺的行补出来
+//-------------------------------------------------------------------------------------------------------------------
+static void Cross_ExtendLines(int below_row, int top, int bottom)
+{
+    int i;
+    int l = Left_Line[below_row];
+    int r = Right_Line[below_row];
+
+    for(i = top; i <= bottom; i++)
+    {
+        Left_Line[i]       = l;
+        Right_Line[i]      = r;
+        Left_Lost_Flag[i]  = 0;
+        Right_Lost_Flag[i] = 0;
+        Mid_Line[i]        = (l + r) >> 1;
+        Road_Wide[i]       = r - l;
+    }
+}
 
 //-------------------------------------------------------------------------------------------------------------------
 // 函数简介     初始化
@@ -93,6 +154,40 @@ void Cross_Check(void)
                     valid_above = 1;
                     break;
                 }
+            }
+        }
+    }
+
+    /* 3.5 只要丢线段足够长，就先补线并画出来（方便测试；十字标志仍按严格判据） */
+    if(cross_run_len >= CROSS_LOST_MIN)
+    {
+        int below_row = run_bottom + 1;
+        int above_row = -1;
+
+        while((below_row < MT9V03X_H) &&
+              (Left_Lost_Flag[below_row] || Right_Lost_Flag[below_row]))
+        {
+            below_row++;
+        }
+
+        for(i = run_top - 1; i >= 0; i--)
+        {
+            if(!Left_Lost_Flag[i] && !Right_Lost_Flag[i])
+            {
+                above_row = i;
+                break;
+            }
+        }
+
+        if(below_row < MT9V03X_H)
+        {
+            if(above_row >= 0)
+            {
+                Cross_FillLines(above_row, below_row, run_top, run_bottom);
+            }
+            else
+            {
+                Cross_ExtendLines(below_row, run_top, run_bottom);
             }
         }
     }

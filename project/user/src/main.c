@@ -372,6 +372,7 @@ static void Frame_Process(void)
     Screen_ShowRefCol(LineDetect_GetRefCol());
     Screen_ShowLineMode((int)line_mode);
     Screen_ShowCross((int)Cross_Flag);
+    Screen_ShowCrossDebug(Cross_GetRunLen());
     Screen_ShowStatus(Err, Island_State, (int)MotorPID_GetTarget());
     Screen_ShowServoAngle((int)Servo_GetAngle());
     Screen_ShowParam((int)run_switch, dbg_duty, (int)MotorPID_GetTarget(), (int)MotorPID_GetMeasured());
