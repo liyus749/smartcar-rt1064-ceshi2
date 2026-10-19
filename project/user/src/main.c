@@ -110,7 +110,11 @@ static volatile float run_ki       = SPEED_KI_DEFAULT;
 static volatile float run_kd       = SPEED_KD_DEFAULT;
 static volatile float run_p        = SERVO_P_DEFAULT;
 static volatile float run_d        = SERVO_D_DEFAULT;
-static volatile float run_threshold = CONTRAST_RATIO_DEFAULT;
+#if (LINE_SCHEME == LINE_MODE_OTSU)
+static volatile float run_threshold = OTSU_BIAS_DEFAULT;       // 大津法：默认偏移量 15
+#else
+static volatile float run_threshold = CONTRAST_RATIO_DEFAULT;  // 对比度：默认阈值 50
+#endif
 static volatile float run_switch   = (float)RUN_AUTO_START;
 static volatile float run_enable   = 0.0f;                 // 初始化完成后置 1，允许跑
 
@@ -276,7 +280,7 @@ static void Frame_Process(void)
     uint8 line_mode;
     float wave[ASSISTANT_OSC_CH_MAX];
 
-    /* 1. 巡线：助手通道 7 选择方案（1 = 对比度，2 = 分段大津法）*/
+    /* 1. 巡线：方案由 LineDetect.h 的 LINE_SCHEME 决定（改宏后重新编译）*/
     line_mode = LINE_SCHEME;
     LineDetect_Process(mt9v03x_image[0], line_mode);
 
