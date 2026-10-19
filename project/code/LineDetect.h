@@ -29,7 +29,7 @@
 //   想用哪一套就改这一行：
 //       LINE_MODE_CONTRAST  = 对比度巡线（当前这版）
 //       LINE_MODE_OTSU      = 分段大津法巡线（以前那版）
-#define LINE_SCHEME             (LINE_MODE_CONTRAST)
+#define LINE_SCHEME             (LINE_MODE_OTSU)
 
 //==================================== 分段大津法参数 ====================================
 
