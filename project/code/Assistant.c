@@ -28,6 +28,7 @@ static seekfree_assistant_camera_boundary_uint8_struct
 static uint8  g_image_copy[MT9V03X_W * MT9V03X_H];                          // 图像拷贝（发送时摄像头会换缓冲，必须拷贝）
 
 static uint8  g_image_div = 0;                                              // 图像分频计数
+static uint8  g_wave_div  = 0;                                              // 波形分频计数
 
 static uint32 g_rx_count  = 0;                                              // 收到的参数总条数
 static uint8  g_last_ch   = 0;                                              // 最近一条参数的通道
@@ -128,31 +129,39 @@ void Assistant_SendFrame(const uint8 *gray, const uint8 *left, const uint8 *righ
     /* 1. 波形（小包，先发）*/
     if(NULL != wave)
     {
-        for(i = 0; i < ASSISTANT_OSC_CH_MAX; i++)
+        g_wave_div++;
+        if(g_wave_div >= ASSISTANT_WAVE_DIV)
         {
-            float v = wave[i];
-            if((v != v) || (v > 1.0e30f) || (v < -1.0e30f)) { v = 0.0f; }   // 消毒 NaN/Inf
-            g_osc_buf[i] = v;
-        }
+            g_wave_div = 0;
+
+            for(i = 0; i < ASSISTANT_OSC_CH_MAX; i++)
+            {
+                float v = wave[i];
+                if((v != v) || (v > 1.0e30f) || (v < -1.0e30f)) { v = 0.0f; }   // 消毒 NaN/Inf
+                g_osc_buf[i] = v;
+            }
 
 #if ASSISTANT_OSC_PROTOCOL
-        /* Printf 文本协议：一行 8 个通道，逗号分隔，换行结尾 */
-        {
-            char line[160];
+            /* Printf 文本协议：一行 8 个通道，逗号分隔，换行结尾 */
+            {
+                char line[160];
 
-            snprintf(line, sizeof(line),
-                     "wave:%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f\n",
-                     g_osc_buf[0], g_osc_buf[1], g_osc_buf[2], g_osc_buf[3],
-                     g_osc_buf[4], g_osc_buf[5], g_osc_buf[6], g_osc_buf[7]);
+                snprintf(line, sizeof(line),
+                         "wave:%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f\n",
+                         g_osc_buf[0], g_osc_buf[1], g_osc_buf[2], g_osc_buf[3],
+                         g_osc_buf[4], g_osc_buf[5], g_osc_buf[6], g_osc_buf[7]);
 
-            wireless_uart_send_string(line);
-        }
+                wireless_uart_send_string(line);
+            }
 #else
-        seekfree_assistant_oscilloscope_send(&g_osc);
+            seekfree_assistant_oscilloscope_send(&g_osc);
 #endif
 
-        /* 包间留间隔：让助手把这一包当成独立的一帧收，帧头才会是 0xAA */
-        system_delay_ms(ASSISTANT_OSC_GAP_MS);
+            if(ASSISTANT_OSC_GAP_MS > 0)
+            {
+                system_delay_ms(ASSISTANT_OSC_GAP_MS);
+            }
+        }
     }
 #endif
 

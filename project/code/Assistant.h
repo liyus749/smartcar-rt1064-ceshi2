@@ -51,12 +51,15 @@
 #define ASSISTANT_SEND_IMAGE       (0)
 #define ASSISTANT_SEND_BOUNDARY    (0)
 
-// 1 = 发波形；0 = 不发（先把控制回路的时间省出来，参数接收不受影响）
-#define ASSISTANT_SEND_WAVE        (0)
+// 1 = 发波形；0 = 不发
+#define ASSISTANT_SEND_WAVE        (1)
+
+// 波形分频：每几帧发一次。5 帧约 100ms，即 10Hz，既能看数据又不拖慢控制
+#define ASSISTANT_WAVE_DIV         (5)
 
 // 波形包之间的间隔（毫秒）。官方例程是 50ms（20Hz）；这里用 20ms（50Hz），
 // 既能让每个波形包单独成帧，又能保证波形刷新够快。
-#define ASSISTANT_OSC_GAP_MS       (20)
+#define ASSISTANT_OSC_GAP_MS       (0)      // 不阻塞；分频本身已经留出了间隔
 
 // 波形发送协议：
 //   1 = Printf 文本（推荐，V2.0.0.11 的"波形显示"按行解析，必须把助手里的 Printf 勾上）
