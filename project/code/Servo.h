@@ -29,9 +29,9 @@
 //          数值 684 = 684/10000 × 20ms = 1.368ms 脉宽
 //          数值每 +1 = 脉宽 +2 微秒
 //===================================================================================================================
-#define SERVO_DUTY_RIGHT        (623)                   // 右打死（数值越小越往右）  实车标定：684-61
-#define SERVO_DUTY_MIDDLE       (684)                   // 居中
-#define SERVO_DUTY_LEFT         (763)                   // 左打死（数值越大越往左）  实车标定：684+79
+#define SERVO_DUTY_RIGHT        (623)                   // 右打死（数值越小越往右）
+#define SERVO_DUTY_MIDDLE       (693)                   // 居中 = (623+763)/2，保证左右打角对称
+#define SERVO_DUTY_LEFT         (763)                   // 左打死（数值越大越往左）
 
 // 打角范围（相对中值），由上面三个值算出来，不用改
 #define SERVO_ANGLE_LEFT_MAX    ((int16)SERVO_DUTY_LEFT  - (int16)SERVO_DUTY_MIDDLE)   // 正数
