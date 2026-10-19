@@ -55,6 +55,11 @@
 // 既能让每个波形包单独成帧，又能保证波形刷新够快。
 #define ASSISTANT_OSC_GAP_MS       (20)
 
+// 波形发送协议：
+//   1 = Printf 文本（推荐，V2.0.0.11 的"波形显示"按行解析，必须把助手里的 Printf 勾上）
+//   0 = 二进制波形包（旧协议，V2.0.0.11 可能不认）
+#define ASSISTANT_OSC_PROTOCOL     (1)
+
 // 参数通道号（和上面注释一一对应）
 typedef enum
 {

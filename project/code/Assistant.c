@@ -127,7 +127,22 @@ void Assistant_SendFrame(const uint8 *gray, const uint8 *left, const uint8 *righ
             if((v != v) || (v > 1.0e30f) || (v < -1.0e30f)) { v = 0.0f; }   // 消毒 NaN/Inf
             g_osc_buf[i] = v;
         }
+
+#if ASSISTANT_OSC_PROTOCOL
+        /* Printf 文本协议：一行 8 个通道，逗号分隔，换行结尾 */
+        {
+            char line[160];
+
+            snprintf(line, sizeof(line),
+                     "wave:%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f\n",
+                     g_osc_buf[0], g_osc_buf[1], g_osc_buf[2], g_osc_buf[3],
+                     g_osc_buf[4], g_osc_buf[5], g_osc_buf[6], g_osc_buf[7]);
+
+            wireless_uart_send_string(line);
+        }
+#else
         seekfree_assistant_oscilloscope_send(&g_osc);
+#endif
 
         /* 包间留间隔：让助手把这一包当成独立的一帧收，帧头才会是 0xAA */
         system_delay_ms(ASSISTANT_OSC_GAP_MS);
