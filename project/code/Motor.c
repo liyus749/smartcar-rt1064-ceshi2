@@ -3,8 +3,7 @@
 * 功能简介          电机模块（左右两个驱动电机）
 *
 * 引脚（和学长工程一致，来自 main.c 里的定义）：
-*   左电机：C11 正转 / C10 反转
-*   右电机：D3  正转 / D2  反转
+*   按单轮实测修正后：左电机由 D3/D2 输出，右电机由 C11/C10 输出。
 *
 * 每个电机用两路 PWM：一路正转、一路反转，另一路给 0。
 * 这样比"一路 PWM + 一路方向 IO"更好，因为支持刹车，而且不用额外的 IO。
@@ -12,10 +11,10 @@
 
 #include "Motor.h"
 
-#define MOTOR_LEFT_PWM_FWD      (PWM2_MODULE2_CHB_C11)  // 左电机 正转
-#define MOTOR_LEFT_PWM_REV      (PWM2_MODULE2_CHA_C10)  // 左电机 反转
-#define MOTOR_RIGHT_PWM_FWD     (PWM2_MODULE3_CHB_D3)   // 右电机 正转
-#define MOTOR_RIGHT_PWM_REV     (PWM2_MODULE3_CHA_D2)   // 右电机 反转
+#define MOTOR_LEFT_PWM_FWD      (PWM2_MODULE3_CHB_D3)   // 实测：此输出驱动车体左轮
+#define MOTOR_LEFT_PWM_REV      (PWM2_MODULE3_CHA_D2)   // 左轮反转
+#define MOTOR_RIGHT_PWM_FWD     (PWM2_MODULE2_CHB_C11)  // 实测：此输出驱动车体右轮
+#define MOTOR_RIGHT_PWM_REV     (PWM2_MODULE2_CHA_C10)  // 右轮反转
 
 #define MOTOR_PWM_FREQ          (17000)                 // 电机 PWM 频率 17kHz（学长用的经验值，避开电磁干扰）
 

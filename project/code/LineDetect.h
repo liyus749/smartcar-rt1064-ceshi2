@@ -5,14 +5,11 @@
 *   两套方案共用同一份输出（Left_Line / Right_Line / 丢线标志 / Search_Stop_Line / image_two_value），
 *   所以后面的环岛、偏差计算、屏幕、助手都不用改。
 *
-*   方案选择（助手通道 7）：
-*       0 = 停
-*       1 = 对比度巡线（Contrast.c，当前这版）
-*       2 = 分段大津法巡线（以前那版：分带大津法 + 最长白列 + 八邻域跟踪）
+*   方案由 LINE_SCHEME 编译期选择；助手通道 7 只负责停车/发车。
 *
 *   参考列：
 *       对比度方案 = Contrast.c 里的 reference_col（最长白列所在列）
-*       大津法方案 = Camera.c 里 Longest_White_Column_Left[1]（最长白列所在列）
+*       大津法方案 = 近处白色赛道段的中点
 *       两套都会通过 LineDetect_GetRefCol() 给屏幕画黄色竖虚线
 ********************************************************************************************************************/
 
@@ -36,14 +33,17 @@
 #define OTSU_BANDS              (4)         // 100 行分成 4 段，每段自己算大津法
 #define OTSU_SMOOTH_K           (0.35f)     // 阈值时间平滑强度
 #define OTSU_BIAS_DEFAULT       (15)        // 阈值偏移量默认值（助手通道 6 可在线改）
+#define OTSU_MIN_CONTRAST       (10)        // 灰度跨度不足时沿用历史阈值，保留十字全白区
 
 //==================================== 边线跟踪参数 ====================================
 
-#define EDGE_WIN                (10)        // 每行搜索窗口：上一行边线 ±10 像素
-#define EDGE_WIN_WIDE           (24)        // 找不到时再用这个更宽的窗口
+#define EDGE_WIN_WIDE           (24)        // 在上一行边界 ±24 像素内优先找最近的跳变
+#define EDGE_BLACK_SUPPORT      (3)         // 边界外至少连续 3 个真实黑像素，忽略细小黑点
+#define EDGE_WHITE_SUPPORT      (3)         // 边界内至少连续 3 个白像素
+#define EDGE_MIN_RUN            (4)         // 少于 4 行的孤立边线段不参与识别/转向
 #define EDGE_MIN_W              (15)        // 赛道最窄宽度（像素）
 #define EDGE_MAX_W              (180)       // 赛道最宽宽度（像素）
-#define EDGE_LOST_MAX           (28)        // 连续丢这么多行才停止跟踪
+// 双边暂时丢线时继续向远处搜索，使较宽十字上方的赛道仍能被重新找到。
 
 #define USE_IMG_FILTER          (1)         // 3x3 邻域滤波
 #define IMG_FLT_MAX_WHITE       (6)         // 邻居里 >=6 个白 -> 填白
@@ -62,6 +62,9 @@ void LineDetect_Init(void);
 // 参数说明     mode       LINE_MODE_CONTRAST / LINE_MODE_OTSU
 //-------------------------------------------------------------------------------------------------------------------
 void LineDetect_Process(const uint8 *image, uint8 mode);
+
+// 根据当前边线重新统计视野、丢线数量和宽度；十字补线后也调用一次。
+void LineDetect_RefreshStats(void);
 
 //-------------------------------------------------------------------------------------------------------------------
 // 函数简介     读取当前参考列（给屏幕画黄色竖虚线）

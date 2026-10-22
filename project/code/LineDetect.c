@@ -17,7 +17,11 @@ extern volatile int   Road_Wide[MT9V03X_H];
 extern int            Left_Lost_Flag[MT9V03X_H];
 extern int            Right_Lost_Flag[MT9V03X_H];
 extern volatile int   Search_Stop_Line;
-extern volatile int   Longest_White_Column_Left[2];
+extern volatile int   Left_Lost_Time;
+extern volatile int   Right_Lost_Time;
+extern volatile int   Both_Lost_Time;
+extern volatile int   Boundry_Start_Left;
+extern volatile int   Boundry_Start_Right;
 extern volatile uint8  Img_Disappear_Flag;
 
 //===================================================================================================================
@@ -30,6 +34,9 @@ static uint8  th_band[OTSU_BANDS];
 static uint8  g_mode    = LINE_MODE_CONTRAST;
 static uint8  g_ref_col = MT9V03X_W / 2;
 static volatile int g_otsu_bias = OTSU_BIAS_DEFAULT;
+static int seed_left;
+static int seed_right;
+static uint8 seed_valid;
 
 //===================================================================================================================
 //  分段大津法
@@ -38,7 +45,7 @@ static volatile int g_otsu_bias = OTSU_BIAS_DEFAULT;
 //-------------------------------------------------------------------------------------------------------------------
 // 函数简介     对图像的某一段行做一次大津法，返回阈值
 //-------------------------------------------------------------------------------------------------------------------
-static uint8 Otsu_Rows(uint8 row_begin, uint8 row_end)
+static int Otsu_Rows(const uint8 *image, uint8 row_begin, uint8 row_end)
 {
     uint16 i;
     uint16 j;
@@ -64,14 +71,15 @@ static uint8 Otsu_Rows(uint8 row_begin, uint8 row_end)
     {
         for(j = 0; j < MT9V03X_W; j++)
         {
-            otsu_hist[mt9v03x_image[i][j]]++;
+            otsu_hist[image[i * MT9V03X_W + j]]++;
         }
     }
 
     for(min_v = 0;    (min_v < 255) && (0 == otsu_hist[min_v]); min_v++) { }
     for(max_v = 255;  (max_v > min_v) && (0 == otsu_hist[max_v]); max_v--) { }
 
-    if(max_v <= (uint8)(min_v + 1)) { return max_v; }
+    // 一整段都是十字白区时，没有两个灰度类别可分，不能把白灰度当成新阈值。
+    if((int)max_v - (int)min_v < OTSU_MIN_CONTRAST) { return -1; }
 
     for(j = min_v; j <= max_v; j++)
     {
@@ -109,7 +117,7 @@ static uint8 Otsu_Rows(uint8 row_begin, uint8 row_end)
 //-------------------------------------------------------------------------------------------------------------------
 // 函数简介     分带大津法：每段自己的阈值，时间平滑，加偏置，再按行二值化
 //-------------------------------------------------------------------------------------------------------------------
-static void Threshold_And_Binarize(void)
+static void Threshold_And_Binarize(const uint8 *image)
 {
     uint16 row;
     uint16 col;
@@ -124,13 +132,17 @@ static void Threshold_And_Binarize(void)
         row_end   = (uint8)(row_begin + (MT9V03X_H / OTSU_BANDS) - 1);
 
         {
-            float otsu = (float)Otsu_Rows(row_begin, row_end);
+            float otsu = (float)Otsu_Rows(image, row_begin, row_end);
 
-            if(th_smooth[b] < 1.0f)
+            if(otsu >= 0.0f)
             {
-                th_smooth[b] = otsu;
+                if(th_smooth[b] < 0.0f) { th_smooth[b] = otsu; }
+                th_smooth[b] += OTSU_SMOOTH_K * (otsu - th_smooth[b]);
             }
-            th_smooth[b] += OTSU_SMOOTH_K * (otsu - th_smooth[b]);
+            else if(th_smooth[b] < 0.0f)
+            {
+                th_smooth[b] = 128.0f; // 尚无历史值时，用中灰阈值区分全白/全黑。
+            }
 
             th = (int)th_smooth[b] + g_otsu_bias;
             if(th > 255) { th = 255; }
@@ -145,7 +157,7 @@ static void Threshold_And_Binarize(void)
 
         for(col = 0; col < MT9V03X_W; col++)
         {
-            image_two_value[row][col] = (mt9v03x_image[row][col] >= th) ? IMG_WHITE : IMG_BLACK;
+            image_two_value[row][col] = (image[row * MT9V03X_W + col] >= th) ? IMG_WHITE : IMG_BLACK;
         }
     }
 }
@@ -210,158 +222,150 @@ static void Image_DrawBlackBorder(void)
 }
 
 //-------------------------------------------------------------------------------------------------------------------
-// 函数简介     八邻域边线跟踪（从底行白段出发，逐行往上跟着走）
+// 函数简介     在上一行边界附近寻找最近的跳变；人工黑边不算真实边线。
+//-------------------------------------------------------------------------------------------------------------------
+static int Edge_HasSupport(int row, int col, int left)
+{
+    int k;
+    int outside = left ? -1 : 1;
+    for(k = 1; k <= EDGE_BLACK_SUPPORT; k++)
+    {
+        int c = col + outside * k;
+        // 人工加上的黑边不作为黑色赛道证据。
+        if((c < 2) || (c >= MT9V03X_W - 2) ||
+           (image_two_value[row][c] != IMG_BLACK)) { return 0; }
+    }
+    for(k = 0; k < EDGE_WHITE_SUPPORT; k++)
+    {
+        int c = col - outside * k;
+        if((c < 2) || (c >= MT9V03X_W - 2) ||
+           (image_two_value[row][c] != IMG_WHITE)) { return 0; }
+    }
+    return 1;
+}
+
+static int Find_Edge(int row, int previous, int left)
+{
+    int d;
+    int side;
+
+    for(d = 0; d <= EDGE_WIN_WIDE; d++)
+    {
+        for(side = 0; side < ((d == 0) ? 1 : 2); side++)
+        {
+            int c = previous + ((side == 0) ? -d : d);
+            if((c <= 2) || (c >= MT9V03X_W - 3)) { continue; }
+            if(image_two_value[row][c] != IMG_WHITE) { continue; }
+            if(Edge_HasSupport(row, c, left))
+            {
+                return c;
+            }
+        }
+    }
+    return -1;
+}
+
+//-------------------------------------------------------------------------------------------------------------------
+// 函数简介     左右独立跟踪；弯道单边出画面时保留另一侧，双丢后仍尝试重捕获。
 //-------------------------------------------------------------------------------------------------------------------
 static void Track_Lines(void)
 {
     int row;
     int c;
-    int l;
-    int r;
-    int run_start;
-    int run_w;
+    int run_start = -1;
     int best_l = 0;
     int best_r = 0;
     int best_w = 0;
-    int has_center_run = 0;
-    int lost;
-    int found;
-
-    run_start = -1;
-
-    for(c = 1; c < MT9V03X_W - 1; c++)
-    {
-        if(IMG_WHITE == image_two_value[MT9V03X_H - 2][c])
-        {
-            if(run_start < 0) { run_start = c; }
-        }
-        else
-        {
-            if(run_start >= 0)
-            {
-                run_w = c - run_start;
-
-                if((run_start <= (MT9V03X_W / 2)) && (c > (MT9V03X_W / 2)))
-                {
-                    best_l = run_start;
-                    best_r = c - 1;
-                    has_center_run = 1;
-                    break;
-                }
-
-                if(run_w > best_w)
-                {
-                    best_w = run_w;
-                    best_l = run_start;
-                    best_r = c - 1;
-                }
-                run_start = -1;
-            }
-        }
-    }
-
-    if(!has_center_run && (run_start >= 0))
-    {
-        run_w = (MT9V03X_W - 1) - run_start;
-        if(run_w > best_w) { best_w = run_w;  best_l = run_start;  best_r = MT9V03X_W - 2; }
-    }
+    int center_run = 0;
+    int l;
+    int r;
 
     for(row = 0; row < MT9V03X_H; row++)
     {
-        Left_Lost_Flag[row]  = 1;
-        Right_Lost_Flag[row] = 1;
+        Left_Line[row] = 0;
+        Right_Line[row] = MT9V03X_W - 1;
+        Left_Lost_Flag[row] = Right_Lost_Flag[row] = 1;
+        Mid_Line[row] = MT9V03X_W / 2;
+        Road_Wide[row] = 0;
     }
 
-    if((best_r - best_l) < EDGE_MIN_W) { return; }
-
-    l = best_l;
-    r = best_r;
-
-    Left_Line[MT9V03X_H - 2]       = l;
-    Right_Line[MT9V03X_H - 2]      = r;
-    Left_Lost_Flag[MT9V03X_H - 2]  = 0;
-    Right_Lost_Flag[MT9V03X_H - 2] = 0;
-    Road_Wide[MT9V03X_H - 2]       = r - l;
-    Mid_Line[MT9V03X_H - 2]        = (l + r) >> 1;
-
-    lost = 0;
-
-    for(row = MT9V03X_H - 3; row >= 0; row--)
+    for(c = 2; c < MT9V03X_W - 1; c++)
     {
-        found = 0;
-
-        for(c = l - EDGE_WIN; c <= l + EDGE_WIN; c++)
+        if(image_two_value[MT9V03X_H - 2][c] == IMG_WHITE)
         {
-            if((c <= 0) || (c >= MT9V03X_W - 1)) { continue; }
-
-            if((IMG_WHITE == image_two_value[row][c]) &&
-               (IMG_BLACK == image_two_value[row][c - 1]))
-            {
-                l = c;
-                found |= 1;
-                break;
-            }
+            if(run_start < 0) { run_start = c; }
         }
-
-        if(0 == (found & 1))
+        else if(run_start >= 0)
         {
-            for(c = l - EDGE_WIN_WIDE; c <= l + EDGE_WIN_WIDE; c++)
+            int width = c - 1 - run_start;
+            int centered = (run_start <= MT9V03X_W / 2) && (c > MT9V03X_W / 2);
+            if((width >= EDGE_MIN_W) && (width <= EDGE_MAX_W) &&
+               ((centered && !center_run) || ((centered == center_run) && (width > best_w))))
             {
-                if((c <= 0) || (c >= MT9V03X_W - 1)) { continue; }
-
-                if((IMG_WHITE == image_two_value[row][c]) &&
-                   (IMG_BLACK == image_two_value[row][c - 1]))
-                {
-                    l = c;
-                    found |= 1;
-                    break;
-                }
+                best_l = run_start;
+                best_r = c - 1;
+                best_w = width;
+                center_run = centered;
             }
+            run_start = -1;
         }
+    }
 
-        for(c = r + EDGE_WIN; c >= r - EDGE_WIN; c--)
+    if(best_w >= EDGE_MIN_W)
+    {
+        seed_left = best_l;
+        seed_right = best_r;
+        seed_valid = 1;
+    }
+    // 十字横向白区进入近处后，沿用上一帧种子，仍能搜索横向白区上方的出口。
+    if(!seed_valid) { return; }
+
+    l = seed_left;
+    r = seed_right;
+    g_ref_col = (uint8)((l + r) / 2);
+    for(row = MT9V03X_H - 1; row >= 2; row--)
+    {
+        int nl = Find_Edge(row, l, 1);
+        int nr = Find_Edge(row, r, 0);
+        if((nl >= 0) && (nr >= 0) &&
+           (((nr - nl) < EDGE_MIN_W) || ((nr - nl) > EDGE_MAX_W)))
         {
-            if((c <= 0) || (c >= MT9V03X_W - 1)) { continue; }
-
-            if((IMG_WHITE == image_two_value[row][c]) &&
-               (IMG_BLACK == image_two_value[row][c + 1]))
-            {
-                r = c;
-                found |= 2;
-                break;
-            }
+            continue;
         }
-
-        if(0 == (found & 2))
+        if(nl >= 0)
         {
-            for(c = r + EDGE_WIN_WIDE; c >= r - EDGE_WIN_WIDE; c--)
-            {
-                if((c <= 0) || (c >= MT9V03X_W - 1)) { continue; }
-
-                if((IMG_WHITE == image_two_value[row][c]) &&
-                   (IMG_BLACK == image_two_value[row][c + 1]))
-                {
-                    r = c;
-                    found |= 2;
-                    break;
-                }
-            }
+            l = nl;
+            Left_Line[row] = l;
+            Left_Lost_Flag[row] = 0;
         }
-
-        if((3 == found) && ((r - l) >= EDGE_MIN_W) && ((r - l) <= EDGE_MAX_W))
+        if(nr >= 0)
         {
-            Left_Line[row]       = l;
-            Right_Line[row]      = r;
-            Left_Lost_Flag[row]  = 0;
+            r = nr;
+            Right_Line[row] = r;
             Right_Lost_Flag[row] = 0;
-            Road_Wide[row]       = r - l;
-            Mid_Line[row]        = (l + r) >> 1;
-            lost = 0;
         }
-        else
+    }
+}
+
+// 丢弃孤立短段；保留正常弯道和十字两端的长边线。
+static void Remove_ShortEdgeRuns(void)
+{
+    int side;
+    for(side = 0; side < 2; side++)
+    {
+        int *lost = side ? Right_Lost_Flag : Left_Lost_Flag;
+        int row = 2;
+        while(row < MT9V03X_H)
         {
-            lost++;
-            if(lost > EDGE_LOST_MAX) { break; }
+            int begin;
+            int i;
+            if(lost[row]) { row++; continue; }
+            begin = row;
+            while((row < MT9V03X_H) && !lost[row]) { row++; }
+            if(row - begin < EDGE_MIN_RUN)
+            {
+                for(i = begin; i < row; i++) { lost[i] = 1; }
+            }
         }
     }
 }
@@ -376,13 +380,16 @@ void LineDetect_Init(void)
 
     for(i = 0; i < OTSU_BANDS; i++)
     {
-        th_smooth[i] = 0.0f;
+        th_smooth[i] = -1.0f;
         th_band[i]   = 0;
     }
 
     g_mode    = LINE_MODE_CONTRAST;
     g_ref_col = MT9V03X_W / 2;
     g_otsu_bias = OTSU_BIAS_DEFAULT;
+    seed_left = MT9V03X_W / 4;
+    seed_right = MT9V03X_W * 3 / 4;
+    seed_valid = 0;
 }
 
 void LineDetect_Process(const uint8 *image, uint8 mode)
@@ -391,19 +398,15 @@ void LineDetect_Process(const uint8 *image, uint8 mode)
 
     if(g_mode == LINE_MODE_OTSU)
     {
-        /* 以前那版：分带大津法 -> 滤波 -> 黑边 -> 最长白列 -> 八邻域跟踪 */
-        Threshold_And_Binarize();
+        /* 分带大津法 -> 滤波 -> 黑边 -> 左右独立跟踪 */
+        Threshold_And_Binarize(image);
 
 #if USE_IMG_FILTER
         Image_Filter();
 #endif
         Image_DrawBlackBorder();
-        Longest_White_Column();
         Track_Lines();
-
-        /* 参考列 = 最长白列所在列 */
-        g_ref_col = (uint8)Longest_White_Column_Left[1];
-        if(g_ref_col >= MT9V03X_W) { g_ref_col = MT9V03X_W - 1; }
+        Remove_ShortEdgeRuns();
     }
     else
     {
@@ -412,15 +415,31 @@ void LineDetect_Process(const uint8 *image, uint8 mode)
         g_ref_col = Contrast_GetReferenceCol();
     }
 
-    /* 视野太短 = 基本没看到赛道 */
-    if(Search_Stop_Line < 20)
+    LineDetect_RefreshStats();
+}
+
+void LineDetect_RefreshStats(void)
+{
+    int row;
+    int farthest = MT9V03X_H;
+
+    Left_Lost_Time = Right_Lost_Time = Both_Lost_Time = 0;
+    Boundry_Start_Left = Boundry_Start_Right = 0;
+    for(row = MT9V03X_H - 1; row >= 0; row--)
     {
-        Img_Disappear_Flag = 1;
+        int left_ok = !Left_Lost_Flag[row];
+        int right_ok = !Right_Lost_Flag[row];
+        if(!left_ok) { Left_Lost_Time++; }
+        if(!right_ok) { Right_Lost_Time++; }
+        if(!left_ok && !right_ok) { Both_Lost_Time++; }
+        if(left_ok && !Boundry_Start_Left) { Boundry_Start_Left = row; }
+        if(right_ok && !Boundry_Start_Right) { Boundry_Start_Right = row; }
+        if(left_ok || right_ok) { farthest = row; }
+        Road_Wide[row] = (left_ok && right_ok) ? Right_Line[row] - Left_Line[row] : 0;
+        Mid_Line[row] = (Left_Line[row] + Right_Line[row]) / 2;
     }
-    else
-    {
-        Img_Disappear_Flag = 0;
-    }
+    Search_Stop_Line = MT9V03X_H - farthest;
+    Img_Disappear_Flag = (Search_Stop_Line < 20) ? 1 : 0;
 }
 
 uint8 LineDetect_GetRefCol(void)

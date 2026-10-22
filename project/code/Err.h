@@ -14,7 +14,10 @@
 
 //==================================== 偏差参数（编译期固定值） ====================================
 
-#define ERR_FILTER           (0.10f)   // 低通滤波强度：0=不滤波；0.1 响应快、仍能压一点噪声
+#define ERR_FILTER           (0.30f)   // 正常跟线的滤波系数：越大响应越快
+#define ERR_RETURN_FILTER    (0.55f)   // 大偏差正在消退/换向时，加快释放旧转向量
+#define ERR_RETURN_MIN       (5.0f)    // 小偏差仍用正常滤波，避免放大直道噪声
+#define ERR_RETURN_GAP       (3.0f)    // 原始偏差比滤波值至少减小多少才加快回正
 #define ERR_BIAS             (0.0f)    // 直道零点偏置：如果直道正中显示 Err=-10，就把这里设成 -10
 #define ERR_D_LIMIT          (20.0f)   // D 项偏差变化量限幅（像素/帧）
 
@@ -30,6 +33,7 @@ extern const float Err_ZoneWeight[ERR_SEGMENTS];
 
 #define ERR_USE_ROW_KERNEL   (1)       // 1 = 段内中间行权重更高（三角核，减弱分段边界跳变）
 #define ERR_USE_WIDTH_CONF   (1)       // 1 = 赛道宽度突变的行降权（抑制误检边线）
+#define ERR_SINGLE_EDGE_WEIGHT (0.5f)  // 单边+历史路宽估算的行降低权重
 
 //==============================================================================================
 

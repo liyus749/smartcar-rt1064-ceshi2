@@ -4,6 +4,7 @@
 ********************************************************************************************************************/
 
 #include "Err.h"
+#include "Cross.h"
 
 extern volatile int   Left_Line[MT9V03X_H];
 extern volatile int   Right_Line[MT9V03X_H];
@@ -25,6 +26,8 @@ volatile int   ErrValidRows = 0;      // 有效行数
 //===================================================================================================================
 static int   zone_mid[MT9V03X_H];     // 每行中线
 static uint8 zone_ok[MT9V03X_H];      // 每行能不能用
+static int   zone_width[MT9V03X_H];   // 本帧用于置信度计算的路宽
+static int   width_history[MT9V03X_H];// 同一行最近的双边实测路宽；0 表示尚未学习
 
 static int   ln_farthest = 0;         // 看得见的最远行
 static int   ln_span     = 0;         // 可见行数
@@ -56,11 +59,13 @@ void Err_Init(void)
     {
         zone_mid[i] = 0;
         zone_ok[i]  = 0;
+        zone_width[i] = 0;
+        width_history[i] = 0;
     }
 }
 
 //-------------------------------------------------------------------------------------------------------------------
-// 函数简介     算每行中线 + 有效性（两边都找到、不是孤立假点）
+// 函数简介     双边直接取中点；弯道只剩单边时，用该行历史实测路宽估算中线。
 // 返回参数     uint8    1 = 数据够用；0 = 看得太少
 //-------------------------------------------------------------------------------------------------------------------
 static uint8 image_line_prepare(void)
@@ -81,8 +86,27 @@ static uint8 image_line_prepare(void)
 
     for(row = farthest; row < MT9V03X_H; row++)
     {
-        zone_mid[row] = (Left_Line[row] + Right_Line[row]) >> 1;
-        zone_ok[row]  = ((0 == Left_Lost_Flag[row]) && (0 == Right_Lost_Flag[row])) ? 1 : 0;
+        int left_ok = !Left_Lost_Flag[row];
+        int right_ok = !Right_Lost_Flag[row];
+        int width = Right_Line[row] - Left_Line[row];
+        zone_ok[row] = 0;
+        if(left_ok && right_ok && (width > 0) && (width < MT9V03X_W))
+        {
+            zone_mid[row] = (Left_Line[row] + Right_Line[row]) / 2;
+            zone_width[row] = width;
+            zone_ok[row] = 1;
+            // 十字补出的线不能当成实测路宽学习。
+            if(!Cross_Flag) { width_history[row] = width; }
+        }
+        else if((left_ok != right_ok) && (width_history[row] > 0))
+        {
+            zone_width[row] = width_history[row];
+            zone_mid[row] = left_ok ? Left_Line[row] + zone_width[row] / 2
+                                    : Right_Line[row] - zone_width[row] / 2;
+            if(zone_mid[row] < 0) { zone_mid[row] = 0; }
+            if(zone_mid[row] >= MT9V03X_W) { zone_mid[row] = MT9V03X_W - 1; }
+            zone_ok[row] = 1;
+        }
     }
 
     /* 去掉孤立假点：和上下相邻两行平均差太多 */
@@ -171,14 +195,14 @@ static uint8 err_zone(float *err_out)
             for(r2 = r0; r2 <= r1; r2++)
             {
                 if(0 == zone_ok[r2]) { continue; }
-                sw += Road_Wide[r2];
+                sw += zone_width[r2];
                 cw++;
             }
 
             if(cw > 0)
             {
                 float avg = (float)sw / (float)cw;
-                float d   = (float)Road_Wide[row] - avg;
+                float d   = (float)zone_width[row] - avg;
 
                 if(d < 0.0f) { d = -d; }
                 conf = 1.0f / (1.0f + d / 20.0f);
@@ -186,6 +210,11 @@ static uint8 err_zone(float *err_out)
             }
         }
 #endif
+
+        if(Left_Lost_Flag[row] || Right_Lost_Flag[row])
+        {
+            conf *= ERR_SINGLE_EDGE_WEIGHT;
+        }
 
         v = zone_mid[row];
         e  = (float)((MT9V03X_W / 2) - v);
@@ -223,14 +252,17 @@ uint8 Err_Compute(void)
     float e;
     uint8 got;
 
+    ErrValidRows = 0;
     if(!image_line_prepare())
     {
+        ErrDFrame = 0.0f;
         return 0;
     }
 
     got = err_zone(&e);
     if(!got)
     {
+        ErrDFrame = 0.0f;
         return 0;
     }
 
@@ -239,12 +271,22 @@ uint8 Err_Compute(void)
     /* 低通滤波 */
     if(ERR_FILTER > 0.01f)
     {
+        float alpha = ERR_FILTER;
+        float old_abs = (err_filt_val >= 0.0f) ? err_filt_val : -err_filt_val;
+        float new_abs = (Err >= 0.0f) ? Err : -Err;
+
+        // 出弯或偏差已换向时，及时释放旧弯道偏差；小误差仍保持滤波。
+        if((old_abs > ERR_RETURN_MIN) &&
+           (((Err * err_filt_val) <= 0.0f) || ((new_abs + ERR_RETURN_GAP) < old_abs)))
+        {
+            alpha = ERR_RETURN_FILTER;
+        }
         if(0 == err_filt_init)
         {
             err_filt_val  = Err;
             err_filt_init = 1;
         }
-        err_filt_val += ERR_FILTER * (Err - err_filt_val);
+        err_filt_val += alpha * (Err - err_filt_val);
         ErrUse = err_filt_val;
     }
     else

@@ -15,11 +15,14 @@ static volatile float g_ki       = MOTORPID_DEFAULT_KI;
 static volatile float g_kd       = MOTORPID_DEFAULT_KD;
 static volatile uint8 g_enable   = 0;
 
-static volatile float g_out      = 0.0f;      // 输出占空比
-static volatile float g_measured = 0.0f;      // 实测速度
-static volatile float g_last_error  = 0.0f;
-static volatile float g_prev_error  = 0.0f;
-static volatile float g_acc         = 0.0f;  // 增量式：输出累计值
+static volatile float g_out      = 0.0f;      // 左右输出平均值（屏幕显示）
+static volatile float g_measured = 0.0f;      // 左右实测速度平均值
+static volatile float g_acc_l    = 0.0f;      // 左轮独立 PID 输出累计值
+static volatile float g_acc_r    = 0.0f;      // 右轮独立 PID 输出累计值
+static volatile float g_last_error_l = 0.0f;
+static volatile float g_prev_error_l = 0.0f;
+static volatile float g_last_error_r = 0.0f;
+static volatile float g_prev_error_r = 0.0f;
 
 //-------------------------------------------------------------------------------------------------------------------
 // 函数简介     限幅
@@ -39,9 +42,12 @@ static void pid_reset(void)
     g_cur_target  = 0.0f;
     g_out         = 0.0f;
     g_measured    = 0.0f;
-    g_last_error  = 0.0f;
-    g_prev_error  = 0.0f;
-    g_acc         = 0.0f;
+    g_acc_l       = 0.0f;
+    g_acc_r       = 0.0f;
+    g_last_error_l = 0.0f;
+    g_prev_error_l = 0.0f;
+    g_last_error_r = 0.0f;
+    g_prev_error_r = 0.0f;
 }
 
 //-------------------------------------------------------------------------------------------------------------------
@@ -101,11 +107,30 @@ void MotorPID_SetEnable(uint8 enable)
 //-------------------------------------------------------------------------------------------------------------------
 // 函数简介     每个控制周期调一次（20ms 中断里）
 //-------------------------------------------------------------------------------------------------------------------
+static float pid_update_one(float target, float measured,
+                            volatile float *last_error,
+                            volatile float *prev_error,
+                            volatile float *accumulator)
+{
+    float error = target - measured;
+    float d_error = error - *last_error;
+    float inc = g_kp * d_error
+              + g_ki * error
+              + g_kd * (error - 2.0f * *last_error + *prev_error);
+
+    *accumulator += inc;
+    *accumulator = limitf(*accumulator, 0.0f, (float)MOTORPID_MAX_DUTY);
+    *prev_error = *last_error;
+    *last_error = error;
+    return *accumulator;
+}
+
 int MotorPID_Update(int enc_l, int enc_r)
 {
-    float error;
-    float d_error;
-    float inc;
+    float measured_l;
+    float measured_r;
+    float out_l;
+    float out_r;
 
     if(0 == g_enable)
     {
@@ -115,22 +140,13 @@ int MotorPID_Update(int enc_l, int enc_r)
         return 0;
     }
 
-    /* 反馈：左右轮编码器计数的【绝对值】平均（编码器计数/10ms）。
-
-       ★ 为什么必须取绝对值：
-         电机只允许正转（输出 0~4000），所以"轮子转多快"只看计数绝对值就够了。
-         以前直接用 (enc_l + enc_r)/2，一旦某个编码器方向接反、或者两个编码器
-         符号相反，反馈就会变成 0 甚至负数 —— PID 以为"车根本没动"，就不断
-         加大输出直到满速，表现就是"一开就转最大速度、调速度参数没用"。
-         取绝对值之后，车越快反馈越大，误差变小，输出自然会稳在目标速度附近，
-         编码器方向反了也不会再正反馈。 */
-    {
-        float ml = (float)enc_l;
-        float mr = (float)enc_r;
-        if(ml < 0.0f) { ml = -ml; }
-        if(mr < 0.0f) { mr = -mr; }
-        g_measured = (ml + mr) * 0.5f;
-    }
+    /* 左右编码器分别取绝对值。两侧电机负载/磨损不同，必须分别闭环，
+       否则较快的一侧会掩盖较慢甚至停转的一侧。 */
+    measured_l = (float)enc_l;
+    measured_r = (float)enc_r;
+    if(measured_l < 0.0f) { measured_l = -measured_l; }
+    if(measured_r < 0.0f) { measured_r = -measured_r; }
+    g_measured = (measured_l + measured_r) * 0.5f;
 
     /* 软启动：目标速度从 0 慢慢爬到设定值（RAMP_MS 内到满）*/
     if(g_cur_target < g_target)
@@ -145,26 +161,15 @@ int MotorPID_Update(int enc_l, int enc_r)
         g_cur_target = g_target;
     }
 
-    error = g_cur_target - g_measured;
-    d_error = error - g_last_error;
+    /* 左右轮各自追踪同一个目标速度，独立补偿电机差异和弯道负载。 */
+    out_l = pid_update_one(g_cur_target, measured_l,
+                           &g_last_error_l, &g_prev_error_l, &g_acc_l);
+    out_r = pid_update_one(g_cur_target, measured_r,
+                           &g_last_error_r, &g_prev_error_r, &g_acc_r);
 
-    /* 增量式 PID：
-       inc = Kp*(e - e1) + Ki*e + Kd*(e - 2*e1 + e2) */
-    inc = g_kp * d_error
-        + g_ki * error
-        + g_kd * (error - 2.0f * g_last_error + g_prev_error);
+    g_out = (out_l + out_r) * 0.5f;
+    Motor_Set((int)out_l, (int)out_r);
 
-    g_acc += inc;
-
-    /* 输出只允许 0~4000（只正转）；限幅即抗积分饱和 */
-    g_acc = limitf(g_acc, 0.0f, (float)MOTORPID_MAX_DUTY);
-
-    g_prev_error = g_last_error;
-    g_last_error = error;
-
-    g_out = g_acc;
-
-    Motor_Set((int)g_out, (int)g_out);
     return (int)g_out;
 }
 

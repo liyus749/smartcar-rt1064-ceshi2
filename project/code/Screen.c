@@ -14,6 +14,7 @@
 
 #include "Screen.h"
 
+static uint8 status_first_frame = 1;
 static uint16 scr_div = 0;                                  // 刷屏分频计数
 
 //-------------------------------------------------------------------------------------------------------------------
@@ -29,6 +30,7 @@ void Screen_Init(void)
     ips200_set_color(RGB565_WHITE, RGB565_BLACK);           // 白字黑底
     ips200_init(IPS_SCREEN_TYPE);                           // ★ 屏幕型号在这里生效
     ips200_clear();
+    status_first_frame = 1;
 
     // 开机先写一行字，方便判断"屏幕到底有没有起来"
     ips200_show_string(0, SCR_TXT_Y, "screen init OK");
@@ -155,6 +157,12 @@ void Screen_ShowServoAngle(int angle)
 //-------------------------------------------------------------------------------------------------------------------
 void Screen_ShowStatus(float err, int state, int target)
 {
+    if(status_first_frame)
+    {
+        // 清除启动提示，避免 Err 后残留 e/OK 被误认为运行状态。
+        ips200_show_string(0, SCR_TXT_Y, "                              ");
+        status_first_frame = 0;
+    }
     /* ★ Err 的整数位数给 3 位（原来是 2 位）。
        逐飞这个 show_float 的实现是"整数部分按 num 位取模"，
        也就是说 num=2 时，Err = -123.4 会被显示成 -23.4（少了个百位），
