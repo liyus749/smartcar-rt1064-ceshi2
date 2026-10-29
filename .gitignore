@@ -16,3 +16,8 @@ JLinkLog.txt
 
 # 清理时移走的旧文件（只是本地备份，不算源码）
 _已移除_旧文件备份/
+
+# 本机临时构建入口与回退辅助信息
+project/mdk/*_build.uvprojx
+project/restore_s1_R1/VALIDATION_ROOT.txt
+project/restore_s1_R1/active_project_before_redirect.xml

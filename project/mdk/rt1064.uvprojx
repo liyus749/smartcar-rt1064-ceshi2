@@ -49,14 +49,14 @@
             <NotGenerated>0</NotGenerated>
             <InvalidFlash>1</InvalidFlash>
           </TargetStatus>
-          <OutputDirectory>.\Objects\</OutputDirectory>
-          <OutputName>rt1064</OutputName>
+          <OutputDirectory>.\Objects\auto180\</OutputDirectory>
+          <OutputName>rt1064_auto180</OutputName>
           <CreateExecutable>1</CreateExecutable>
           <CreateLib>0</CreateLib>
           <CreateHexFile>0</CreateHexFile>
           <DebugInformation>1</DebugInformation>
           <BrowseInformation>1</BrowseInformation>
-          <ListingPath>.\Listings\</ListingPath>
+          <ListingPath>.\Listings\auto180\</ListingPath>
           <HexFormatSelection>1</HexFormatSelection>
           <Merge32K>0</Merge32K>
           <CreateBatchFile>0</CreateBatchFile>
@@ -341,7 +341,7 @@
               <MiscControls>-fno-common  -fdata-sections  -ffreestanding  -fno-builtin  -mthumb -Wno-invalid-source-encoding</MiscControls>
               <Define>CPU_MIMXRT1064DVL6A,SKIP_SYSCLK_INIT,XIP_EXTERNAL_FLASH=1, XIP_BOOT_HEADER_DCD_ENABLE =1, XIP_BOOT_HEADER_ENABLE =1,PRINTF_FLOAT_ENABLE=1, SCANF_FLOAT_ENABLE=1, PRINTF_ADVANCED_ENABLE=1, SCANF_ADVANCED_ENABLE=1, FSL_DRIVER_TRANSFER_DOUBLE_WEAK_IRQ=0, USB_STACK_BM, DEBUG, MCUXPRESSO_SDK, SD_ENABLED</Define>
               <Undefine></Undefine>
-              <IncludePath>..\user\inc;..\code;..\..\libraries\sdk\startup\mdk;..\..\libraries\sdk\deceive;..\..\libraries\sdk\drives;..\..\libraries\sdk\xip;..\..\libraries\sdk\utilities;..\..\libraries\sdk\utilities\debug_console;..\..\libraries\sdk\utilities\str;..\..\libraries\sdk\cmsis_drivers;..\..\libraries\sdk\CMSIS\Include;..\..\libraries\sdk\CMSIS\Driver\Include;..\..\libraries\sdk\components\lists;..\..\libraries\sdk\components\osa;..\..\libraries\sdk\components\serial_manager;..\..\libraries\sdk\components\uart;..\..\libraries\sdk\board;..\..\libraries\components\fatfs\source;..\..\libraries\components\fatfs\source\fsl_sd_disk;..\..\libraries\components\sdmmc;..\..\libraries\components\sdmmc\common;..\..\libraries\components\sdmmc\host\usdhc;..\..\libraries\components\sdmmc\osa;..\..\libraries\components\sdmmc\sd;..\..\libraries\components\usb\device;..\..\libraries\components\usb\include;..\..\libraries\components\usb\phy;..\..\libraries\components\usb\usb_cdc_adapter;..\..\libraries\zf_common;..\..\libraries\zf_driver;..\..\libraries\zf_device</IncludePath>
+              <IncludePath>..\restore_s1_R1\user\inc;..\restore_s1_R1\code;..\..\libraries\sdk\startup\mdk;..\..\libraries\sdk\deceive;..\..\libraries\sdk\drives;..\..\libraries\sdk\xip;..\..\libraries\sdk\utilities;..\..\libraries\sdk\utilities\debug_console;..\..\libraries\sdk\utilities\str;..\..\libraries\sdk\cmsis_drivers;..\..\libraries\sdk\CMSIS\Include;..\..\libraries\sdk\CMSIS\Driver\Include;..\..\libraries\sdk\components\lists;..\..\libraries\sdk\components\osa;..\..\libraries\sdk\components\serial_manager;..\..\libraries\sdk\components\uart;..\..\libraries\sdk\board;..\..\libraries\components\fatfs\source;..\..\libraries\components\fatfs\source\fsl_sd_disk;..\..\libraries\components\sdmmc;..\..\libraries\components\sdmmc\common;..\..\libraries\components\sdmmc\host\usdhc;..\..\libraries\components\sdmmc\osa;..\..\libraries\components\sdmmc\sd;..\..\libraries\components\usb\device;..\..\libraries\components\usb\include;..\..\libraries\components\usb\phy;..\..\libraries\components\usb\usb_cdc_adapter;..\..\libraries\zf_common;..\..\libraries\zf_driver;..\..\libraries\zf_device</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -388,12 +388,12 @@
             <File>
               <FileName>isr.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\user\src\isr.c</FilePath>
+              <FilePath>..\restore_s1_R1\user\src\isr.c</FilePath>
             </File>
             <File>
               <FileName>main.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\user\src\main.c</FilePath>
+              <FilePath>..\restore_s1_R1\user\src\main.c</FilePath>
             </File>
           </Files>
         </Group>
@@ -403,7 +403,7 @@
             <File>
               <FileName>isr.h</FileName>
               <FileType>5</FileType>
-              <FilePath>..\user\inc\isr.h</FilePath>
+              <FilePath>..\restore_s1_R1\user\inc\isr.h</FilePath>
             </File>
           </Files>
         </Group>
@@ -418,142 +418,172 @@
             <File>
               <FileName>Motor.h</FileName>
               <FileType>5</FileType>
-              <FilePath>..\code\Motor.h</FilePath>
+              <FilePath>..\restore_s1_R1\code\Motor.h</FilePath>
             </File>
             <File>
               <FileName>Motor.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\code\Motor.c</FilePath>
+              <FilePath>..\restore_s1_R1\code\Motor.c</FilePath>
             </File>
             <File>
               <FileName>Servo.h</FileName>
               <FileType>5</FileType>
-              <FilePath>..\code\Servo.h</FilePath>
+              <FilePath>..\restore_s1_R1\code\Servo.h</FilePath>
             </File>
             <File>
               <FileName>Servo.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\code\Servo.c</FilePath>
+              <FilePath>..\restore_s1_R1\code\Servo.c</FilePath>
             </File>
             <File>
               <FileName>Camera.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\code\Camera.c</FilePath>
+              <FilePath>..\restore_s1_R1\code\Camera.c</FilePath>
             </File>
             <File>
               <FileName>Camera.h</FileName>
               <FileType>5</FileType>
-              <FilePath>..\code\Camera.h</FilePath>
+              <FilePath>..\restore_s1_R1\code\Camera.h</FilePath>
             </File>
             <File>
               <FileName>Screen.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\code\Screen.c</FilePath>
+              <FilePath>..\restore_s1_R1\code\Screen.c</FilePath>
             </File>
             <File>
               <FileName>Screen.h</FileName>
               <FileType>5</FileType>
-              <FilePath>..\code\Screen.h</FilePath>
+              <FilePath>..\restore_s1_R1\code\Screen.h</FilePath>
             </File>
             <File>
               <FileName>Contrast.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\code\Contrast.c</FilePath>
+              <FilePath>..\restore_s1_R1\code\Contrast.c</FilePath>
             </File>
             <File>
               <FileName>Contrast.h</FileName>
               <FileType>5</FileType>
-              <FilePath>..\code\Contrast.h</FilePath>
+              <FilePath>..\restore_s1_R1\code\Contrast.h</FilePath>
             </File>
             <File>
               <FileName>LineDetect.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\code\LineDetect.c</FilePath>
+              <FilePath>..\restore_s1_R1\code\LineDetect.c</FilePath>
             </File>
             <File>
               <FileName>LineDetect.h</FileName>
               <FileType>5</FileType>
-              <FilePath>..\code\LineDetect.h</FilePath>
+              <FilePath>..\restore_s1_R1\code\LineDetect.h</FilePath>
             </File>
             <File>
               <FileName>Cross.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\code\Cross.c</FilePath>
+              <FilePath>..\restore_s1_R1\code\Cross.c</FilePath>
             </File>
             <File>
               <FileName>Cross.h</FileName>
               <FileType>5</FileType>
-              <FilePath>..\code\Cross.h</FilePath>
+              <FilePath>..\restore_s1_R1\code\Cross.h</FilePath>
+            </File>
+            <File>
+              <FileName>Roundabout.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\restore_s1_R1\code\Roundabout.c</FilePath>
+            </File>
+            <File>
+              <FileName>Roundabout.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\restore_s1_R1\code\Roundabout.h</FilePath>
             </File>
             <File>
               <FileName>Err.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\code\Err.c</FilePath>
+              <FilePath>..\restore_s1_R1\code\Err.c</FilePath>
             </File>
             <File>
               <FileName>Err.h</FileName>
               <FileType>5</FileType>
-              <FilePath>..\code\Err.h</FilePath>
+              <FilePath>..\restore_s1_R1\code\Err.h</FilePath>
             </File>
             <File>
               <FileName>MotorPID.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\code\MotorPID.c</FilePath>
+              <FilePath>..\restore_s1_R1\code\MotorPID.c</FilePath>
             </File>
             <File>
               <FileName>MotorPID.h</FileName>
               <FileType>5</FileType>
-              <FilePath>..\code\MotorPID.h</FilePath>
+              <FilePath>..\restore_s1_R1\code\MotorPID.h</FilePath>
+            </File>
+            <File>
+              <FileName>MotorTune.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\restore_s1_R1\code\MotorTune.c</FilePath>
+            </File>
+            <File>
+              <FileName>MotorTune.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\restore_s1_R1\code\MotorTune.h</FilePath>
+            </File>
+            <File>
+              <FileName>TrackRemote.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\restore_s1_R1\code\TrackRemote.c</FilePath>
+            </File>
+            <File>
+              <FileName>TrackRemote.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\restore_s1_R1\code\TrackRemote.h</FilePath>
             </File>
             <File>
               <FileName>Assistant.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\code\Assistant.c</FilePath>
+              <FilePath>..\restore_s1_R1\code\Assistant.c</FilePath>
             </File>
             <File>
               <FileName>Assistant.h</FileName>
               <FileType>5</FileType>
-              <FilePath>..\code\Assistant.h</FilePath>
+              <FilePath>..\restore_s1_R1\code\Assistant.h</FilePath>
             </File>
             <File>
               <FileName>seekfree_assistant.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\code\seekfree_assistant.c</FilePath>
+              <FilePath>..\restore_s1_R1\code\seekfree_assistant.c</FilePath>
             </File>
             <File>
               <FileName>seekfree_assistant.h</FileName>
               <FileType>5</FileType>
-              <FilePath>..\code\seekfree_assistant.h</FilePath>
+              <FilePath>..\restore_s1_R1\code\seekfree_assistant.h</FilePath>
             </File>
             <File>
               <FileName>seekfree_assistant_interface.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\code\seekfree_assistant_interface.c</FilePath>
+              <FilePath>..\restore_s1_R1\code\seekfree_assistant_interface.c</FilePath>
             </File>
             <File>
               <FileName>seekfree_assistant_interface.h</FileName>
               <FileType>5</FileType>
-              <FilePath>..\code\seekfree_assistant_interface.h</FilePath>
+              <FilePath>..\restore_s1_R1\code\seekfree_assistant_interface.h</FilePath>
             </File>
             <File>
               <FileName>GYRO.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\code\GYRO.c</FilePath>
+              <FilePath>..\restore_s1_R1\code\GYRO.c</FilePath>
             </File>
             <File>
               <FileName>GYRO.h</FileName>
               <FileType>5</FileType>
-              <FilePath>..\code\GYRO.h</FilePath>
+              <FilePath>..\restore_s1_R1\code\GYRO.h</FilePath>
             </File>
             <File>
               <FileName>island.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\code\island.c</FilePath>
+              <FilePath>..\restore_s1_R1\code\island.c</FilePath>
             </File>
             <File>
               <FileName>island.h</FileName>
               <FileType>5</FileType>
-              <FilePath>..\code\island.h</FilePath>
+              <FilePath>..\restore_s1_R1\code\island.h</FilePath>
             </File>
           </Files>
         </Group>

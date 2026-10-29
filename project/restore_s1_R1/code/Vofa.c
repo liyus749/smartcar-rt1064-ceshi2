@@ -1,0 +1,267 @@
+/*********************************************************************************************************************
+* 文件名称          Vofa
+* 功能简介          VOFA+ 上位机通信（无线串口发波形 + 收参数在线调参）
+*
+* 硬件             逐飞【无线串口模块】，插主板"无线模块"接口
+*                  单片机 D16(TX) / D17(RX) / D26(RTS)，走 UART8，115200
+*                  接收通路逐飞库已经接好（isr.c 的 LPUART8_IRQHandler 会调回调）
+*
+* 协议参考         https://www.vofa.plus/docs/learning/dataengines/justfloat
+*                  https://www.vofa.plus/docs/learning/start/data_cmd_parameter
+********************************************************************************************************************/
+
+#include "Vofa.h"
+#include "zf_device_wireless_uart.h"        /* 无线串口模块（UART8）*/
+
+volatile float  Vofa_Param[26][10];
+volatile uint8  Vofa_ParamFlag[26][10];
+
+volatile uint32 Vofa_RxBytes = 0;                                   /* 从电脑收到的总字节数（只涨不跌）*/
+volatile uint32 Vofa_CmdOk   = 0;                                   /* 成功解析出的参数条数（只涨不跌）*/
+
+static const uint8 vofa_tail[4] = { 0x00, 0x00, 0x80, 0x7f };       /* JustFloat 帧尾 */
+
+static char  vofa_line[48];                                         /* 收命令用的行缓冲 */
+static uint8 vofa_len = 0;
+
+//-------------------------------------------------------------------------------------------------------------------
+// 函数简介     初始化（内部会初始化 UART8 无线串口）
+//-------------------------------------------------------------------------------------------------------------------
+void Vofa_Init(void)
+{
+    uint8 i, j;
+    uint8 init_ret;
+
+    for(i = 0; i < 26; i++)
+    {
+        for(j = 0; j < 10; j++)
+        {
+            Vofa_Param[i][j]     = 0.0f;
+            Vofa_ParamFlag[i][j] = 0;
+        }
+    }
+    vofa_len = 0;
+    Vofa_RxBytes = 0;
+    Vofa_CmdOk   = 0;
+
+    /* 初始化无线串口（UART8，D16/D17）
+       现在是【自动波特率】模式：模块自己识别单片机用的是多少波特率，不用重新配模块 */
+    init_ret = wireless_uart_init();
+
+    /* 初始化失败 = 自动波特率没匹配上
+       （模块没插好 / RTS 没接 / 固件版本不支持）
+       ★ 这时候串口是发不出去的，所以只能用 B9 灯报警 */
+    if(0 != init_ret)
+    {
+        for(i = 0; i < 10; i++)                 /* B9 快闪 10 下 = 无线串口初始化失败 */
+        {
+            gpio_set_level(B9, GPIO_LOW);   system_delay_ms(80);
+            gpio_set_level(B9, GPIO_HIGH);  system_delay_ms(80);
+        }
+        return;
+    }
+
+    gpio_set_level(B9, GPIO_LOW);               /* B9 常亮 0.5 秒 = 无线串口初始化成功 */
+    system_delay_ms(500);
+    gpio_set_level(B9, GPIO_HIGH);
+
+    wireless_uart_send_string("\r\n[VOFA] ready, UART8 auto-baud\r\n");
+}
+
+//-------------------------------------------------------------------------------------------------------------------
+// 函数简介     发一包波形（JustFloat：小端 float 数组 + 4 字节帧尾 00 00 80 7F）
+// 参数说明     vals        浮点数组
+// 参数说明     n           通道数（1 ~ VOFA_MAX_CH）
+// 使用示例     float w[8] = {Err, angle, enc_l, enc_r, duty, stopline, lost_l, lost_r};
+//              Vofa_SendWaves(w, 8);
+//-------------------------------------------------------------------------------------------------------------------
+void Vofa_SendWaves(const float *vals, uint8 n)
+{
+    float tmp[VOFA_MAX_CH];
+    uint8 i;
+
+    if((NULL == vals) || (0 == n))
+    {
+        return;
+    }
+    if(n > VOFA_MAX_CH)
+    {
+        n = VOFA_MAX_CH;
+    }
+
+    /* ---------- ★★ 先"消毒"：NaN / 无穷大 绝对不能进数据流 ★★ ----------
+       为什么必须处理：
+         JustFloat 的帧尾 4 个字节是  00 00 80 7F，
+         而【正无穷大】这个 float 在内存里的 4 个字节【正好也是 00 00 80 7F】。
+         所以只要有一个通道算出正无穷大（最典型的就是除以 0），上位机就会以为
+         "这一包到这儿就结束了"，把后面的数据全当成下一包 —— 结果是：
+            · 通道整体错位（VOFA 上的第 1 条其实不是 Err）
+            · 曲线看起来乱跳 / 像卡住不动
+            · 数值和屏幕上对不上
+         NaN 也一样会让上位机显示成乱码。
+       这里统一替换成 0，波形就永远是干净的。（判断方法：自己不等于自己就是 NaN） */
+    for(i = 0; i < n; i++)
+    {
+        tmp[i] = vals[i];
+        if((tmp[i] != tmp[i]) || (tmp[i] > 1.0e30f) || (tmp[i] < -1.0e30f))
+        {
+            tmp[i] = 0.0f;
+        }
+    }
+
+    wireless_uart_send_buffer((const uint8 *)tmp, (uint32)n * sizeof(float));
+    wireless_uart_send_buffer(vofa_tail, 4);
+}
+
+//-------------------------------------------------------------------------------------------------------------------
+// 函数简介     解析一条命令，格式：【字母】【数字】=【数值】
+// 举例         "P1=2.5!"   ->  Vofa_Param['P'-'A'][1] = 2.5
+//              "P1=2.5"    ->  一样能认（结尾不一定要 '!'）
+//              "M=1!"      ->  Vofa_Param['M'-'A'][0] = 1.0   （不带数字相当于 0）
+//              "D1=-5.5!"  ->  支持负数
+// 备注信息     手写解析，不用 sscanf（省浮点扫描库的开销），小数用累乘法（不用 powf）
+//              【容错】字母不要求在第一个字节，结尾不要求是 '!'，
+//                      数值前面有空格也行，后面有杂字符（换行/回车）也不影响
+//-------------------------------------------------------------------------------------------------------------------
+static void vofa_parse_line(const char *s, uint8 len)
+{
+    uint8 i;
+    uint8 eq = 0xFF;                            /* 最后一个 '=' 的位置 */
+    uint8 letter = 0;                           /* 命令的字母 */
+    uint8 digit  = 0;                           /* 命令后面跟的数字（第几组）*/
+    uint8 got_digit = 0;
+    uint8 neg = 0;
+    uint8 dot = 0;
+    uint8 seen = 0;
+    float v = 0.0f;
+    float frac = 0.1f;
+    char  c;
+
+    if(0 == len) { return; }
+
+    /* ---------- 1. 找【最后一个】'=' ----------
+       为什么找最后一个：电脑发下来的东西前面可能带换行之类的杂字符，
+       找第一个万一杂字符里有 '=' 就会解析错。 */
+    for(i = 0; i < len; i++)
+    {
+        if('=' == s[i]) { eq = i; }
+    }
+    if(0xFF == eq) { return; }                  /* 没有 '='：这不是参数命令，丢弃 */
+
+    /* ---------- 2. 名字：等号前面【最近的那个字母】+ 可选的一个数字 ----------
+       ★ 不再要求字母在第 1 个字节 —— 前面多几个换行/空格也认 */
+    for(i = eq; i > 0; i--)
+    {
+        c = s[i - 1];
+
+        if((c >= 'a') && (c <= 'z')) { c = (char)(c - 32); }     /* 小写转大写 */
+
+        if((c >= 'A') && (c <= 'Z'))
+        {
+            letter = (uint8)c;
+            break;
+        }
+        if(((c >= '0') && (c <= '9')) && (0 == got_digit))
+        {
+            digit     = (uint8)(c - '0');
+            got_digit = 1;
+        }
+    }
+    if(0 == letter) { return; }                 /* 等号前面没有字母，丢弃 */
+
+    /* ---------- 3. 数值：等号后面，能读多少读多少 ----------
+       ★ 不再要求必须以 '!' 结尾；读到不认识的字（换行 / '!' / 乱码）就停下，
+         前面那几个数字照样算数 —— 这样"格式差点"的命令也能用 */
+    i = (uint8)(eq + 1);
+    while((i < len) && ((' ' == s[i]) || ('\t' == s[i]))) { i++; }      /* 跳过空格 */
+
+    if((i < len) && (('-' == s[i]) || ('+' == s[i])))
+    {
+        neg = ('-' == s[i]) ? 1 : 0;
+        i++;
+    }
+
+    for(; i < len; i++)
+    {
+        c = s[i];
+
+        if((c >= '0') && (c <= '9'))
+        {
+            if(0 == dot) { v = v * 10.0f + (float)(c - '0'); }
+            else         { v = v + (float)(c - '0') * frac; frac *= 0.1f; }
+            seen = 1;
+        }
+        else if('.' == c)
+        {
+            dot = 1;
+        }
+        else
+        {
+            break;                                              /* 数值到这儿结束 */
+        }
+    }
+
+    if(0 == seen) { return; }                                   /* 一个数字都没读到 */
+    if(neg)       { v = -v; }
+
+    Vofa_Param[letter - 'A'][digit]     = v;
+    Vofa_ParamFlag[letter - 'A'][digit] = 1;
+    Vofa_CmdOk++;                                               /* ★ 成功收到一条参数 */
+}
+
+//-------------------------------------------------------------------------------------------------------------------
+// 函数简介     收参数（每圈都要调！无线串口接收缓冲只有 64 字节）
+// 备注信息     '!' 和【换行】都当一条命令的结束标志 —— 两种都认
+//              （以前只认 '!'，如果上位机发的是 "V1=1000\r\n" 就整条被丢掉，
+//                这就是"参数传不进来"最可能的原因之一）
+//              收到多少字节记在 Vofa_RxBytes，成功解析出多少条记在 Vofa_CmdOk
+//-------------------------------------------------------------------------------------------------------------------
+void Vofa_Poll(void)
+{
+    uint8  buf[32];
+    uint32 n;
+    uint32 i;
+    char   c;
+
+    n = wireless_uart_read_buffer(buf, sizeof(buf));
+    Vofa_RxBytes += n;                                          /* ★ 累计收到的字节数 */
+
+    for(i = 0; i < n; i++)
+    {
+        c = (char)buf[i];
+
+        if(('!' == c) || ('\n' == c))                           /* '!' 或换行 = 一条命令结束 */
+        {
+            if(vofa_len > 0)
+            {
+                vofa_parse_line(vofa_line, vofa_len);
+                vofa_len = 0;
+            }
+        }
+        else if('\r' == c)
+        {
+            /* 回车丢掉，不占缓冲区 */
+        }
+        else if(vofa_len < (sizeof(vofa_line) - 2))
+        {
+            vofa_line[vofa_len++] = c;
+        }
+        else
+        {
+            vofa_len = 0;                                       /* 一条太长（比如收到乱码），丢掉重来 */
+        }
+    }
+}
+
+//-------------------------------------------------------------------------------------------------------------------
+// 函数简介     读一个参数：Vofa_Get('P', 1)
+//-------------------------------------------------------------------------------------------------------------------
+float Vofa_Get(char letter, uint8 digit)
+{
+    if((letter >= 'a') && (letter <= 'z')) { letter -= 32; }
+    if((letter < 'A') || (letter > 'Z'))   { return 0.0f; }
+    if(digit > 9)                          { return 0.0f; }
+
+    return Vofa_Param[letter - 'A'][digit];
+}
+

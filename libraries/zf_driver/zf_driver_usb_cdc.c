@@ -133,6 +133,12 @@ extern usb_device_class_struct_t g_UsbDeviceCdcVcomConfig;
 
 usb_cdc_vcom_struct_t s_cdcVcom;
 
+/* Buffered nonblocking native USB1 API. */
+#define CDC_RX_RING_SIZE 1024U
+static uint8 cdc_rx_ring[CDC_RX_RING_SIZE];
+static volatile uint32 cdc_rx_write, cdc_rx_read, cdc_session;
+static volatile uint8 cdc_rx_overflow;
+USB_DMA_NONINIT_DATA_ALIGN(USB_DATA_ALIGN_SIZE) static uint8 cdc_tx_copy[512];
 uint8 usb_cdc_com_open_flag;
 uint8 usb_cdc_com_first_flag;
 
@@ -492,6 +498,10 @@ usb_status_t USB_DeviceCallback(usb_device_handle handle, uint32_t event, void *
         case kUSB_DeviceEventBusReset:
         {
             s_cdcVcom.attach               = 0;
+            s_cdcVcom.startTransactions = 0;
+            cdc_rx_write = cdc_rx_read = 0;
+            cdc_rx_overflow = 0;
+            cdc_session++;
             s_cdcVcom.currentConfiguration = 0U;
             error                          = kStatus_USB_Success;
 #if (defined(USB_DEVICE_CONFIG_EHCI) && (USB_DEVICE_CONFIG_EHCI > 0U)) || \
@@ -508,12 +518,17 @@ usb_status_t USB_DeviceCallback(usb_device_handle handle, uint32_t event, void *
             if (0U == (*temp8))
             {
                 s_cdcVcom.attach               = 0;
+                s_cdcVcom.startTransactions = 0;
+                cdc_rx_write = cdc_rx_read = 0;
+                cdc_session++;
                 s_cdcVcom.currentConfiguration = 0U;
                 error                          = kStatus_USB_Success;
             }
             else if (USB_CDC_VCOM_CONFIGURE_INDEX == (*temp8))
             {
                 s_cdcVcom.attach               = 1;
+                /* Independent of host RTS/DTR. */
+                s_cdcVcom.startTransactions = 1;
                 s_cdcVcom.currentConfiguration = *temp8;
                 error                          = kStatus_USB_Success;
                 /* Schedule buffer for receive */
@@ -706,8 +721,59 @@ void usb_cdc_write_buffer(uint8 *p, uint32 length)
 //-------------------------------------------------------------------------------------------------------------------
 void usb_cdc_receive_buffer_callback(void)
 {
-    // 数据存储在usb_cdc_receive_buff数组中
-    // usb_cdc_receive_size表示本次接收到多少个数据
+    uint32 i;
+    if(cdc_rx_overflow || usb_cdc_receive_size > DATA_BUFF_SIZE) { return; }
+    for(i=0; i<usb_cdc_receive_size; i++)
+    {
+        uint32 next=(cdc_rx_write+1U)%CDC_RX_RING_SIZE;
+        if(next==cdc_rx_read) { cdc_rx_overflow=1; break; }
+        cdc_rx_ring[cdc_rx_write]=usb_cdc_receive_buff[i];
+        __DMB(); cdc_rx_write=next;
+    }
+}
+
+uint8 usb_cdc_ready(void)
+{
+    return (s_cdcVcom.attach && s_cdcVcom.cdcAcmHandle &&
+            (USB1->PORTSC1 & USB_PORTSC1_CCS_MASK)) ? 1U : 0U;
+}
+uint32 usb_cdc_session(void) { return cdc_session; }
+
+uint8 usb_cdc_read_byte(uint8 *value)
+{
+    uint32 mask=__get_PRIMASK();
+    uint8 result=0;
+    __disable_irq();
+    if(cdc_rx_read!=cdc_rx_write)
+    {
+        *value=cdc_rx_ring[cdc_rx_read];
+        cdc_rx_read=(cdc_rx_read+1U)%CDC_RX_RING_SIZE;
+        result=1;
+    }
+    __set_PRIMASK(mask); return result;
+}
+uint8 usb_cdc_rx_fault(void)
+{
+    uint32 mask=__get_PRIMASK();
+    uint8 result;
+    __disable_irq(); result=cdc_rx_overflow;
+    if(result) { cdc_rx_read=cdc_rx_write; cdc_rx_overflow=0; }
+    __set_PRIMASK(mask); return result;
+}
+uint8 usb_cdc_try_write(const uint8 *data, uint32 length)
+{
+    uint32 mask=__get_PRIMASK();
+    uint8 result=0;
+    if(!length || length>sizeof(cdc_tx_copy)) { return 0; }
+    __disable_irq();
+    if(usb_cdc_ready() && !usb_cdc_check_busy())
+    {
+        /* Persistent aligned buffer: never DMA from a caller's stack. */
+        memcpy(cdc_tx_copy,data,length);
+        result=(kStatus_USB_Success==USB_DeviceCdcAcmSend(s_cdcVcom.cdcAcmHandle,
+                   USB_CDC_VCOM_BULK_IN_ENDPOINT,cdc_tx_copy,length));
+    }
+    __set_PRIMASK(mask); return result;
 }
 
 //-------------------------------------------------------------------------------------------------------------------
@@ -731,6 +797,7 @@ void usb_cdc_init(void)
     if (kStatus_USB_Success != USB_DeviceClassInit(CONTROLLER_ID, &s_cdcAcmConfigList, &s_cdcVcom.deviceHandle))
     {
         //usb_echo("USB device init failed\r\n");
+        return;
     }
     else
     {

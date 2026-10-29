@@ -44,5 +44,10 @@ void  usb_cdc_write_byte(uint8 dat);
 void  usb_cdc_write_string(const char *str);
 void  usb_cdc_write_buffer(uint8 *p, uint32 length);
 void  usb_cdc_init(void);
+uint8 usb_cdc_ready(void);
+uint32 usb_cdc_session(void);
+uint8 usb_cdc_read_byte(uint8 *value);
+uint8 usb_cdc_rx_fault(void);
+uint8 usb_cdc_try_write(const uint8 *data, uint32 length);
 
 #endif

@@ -212,10 +212,13 @@ uint32 wireless_uart_read_buffer (uint8 *buff, uint32 len)
 //              由串口中断服务函数调用 wireless_module_uart_handler() 函数
 //              再由 wireless_module_uart_handler() 函数调用本函数
 //-------------------------------------------------------------------------------------------------------------------
+static volatile uint32 wireless_rx_errors;
+uint32 wireless_uart_rx_errors(void) { return wireless_rx_errors; }
+
 void wireless_uart_callback (void)
 {
     uart_query_byte(WIRELESS_UART_INDEX, &wireless_uart_data);
-    fifo_write_buffer(&wireless_uart_fifo, &wireless_uart_data, 1);
+    if(FIFO_SUCCESS != fifo_write_buffer(&wireless_uart_fifo, &wireless_uart_data, 1)) { wireless_rx_errors++; }
 #if WIRELESS_UART_AUTO_BAUD_RATE                                                // 开启自动波特率
     if(WIRELESS_UART_AUTO_BAUD_RATE_START == wireless_auto_baud_flag && 3 == fifo_used(&wireless_uart_fifo))
     {
@@ -236,6 +239,7 @@ void wireless_uart_callback (void)
 uint8 wireless_uart_init (void)
 {
     uint8 return_state = 0;
+    wireless_rx_errors = 0;
     set_wireless_type(WIRELESS_UART, wireless_uart_callback);
 
     fifo_init(&wireless_uart_fifo, FIFO_DATA_8BIT, wireless_uart_buffer, WIRELESS_UART_BUFFER_SIZE);
