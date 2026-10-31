@@ -6,24 +6,11 @@
 #define ROUNDABOUT_H
 #include "zf_common_headfile.h"
 
-#define ROUND_CONFIRM_FRAMES       3
-#define ROUND_PHASE_CONFIRM        3
-#define ROUND_RECOVER_FRAMES        5
-#define ROUND_EXIT_ARM_FRAMES       6
-// Three-corner recognition, in pixels/rows of the 188x100 image.
-#define ROUND_CORNER_JUMP           10 // inward step or a real lost-edge lip
-#define ROUND_CORNER_MIN_HEIGHT     12 // separation of lower and upper corners
-#define ROUND_CORNER_MIN_GAP         4 // peak must lie between both corners
-#define ROUND_CORNER_PROMINENCE      4 // peak projects inward beyond BOTH ends
-#define ROUND_CORNER_TRACK_X        23 // maximum candidate motion between frames
-#define ROUND_CORNER_TRACK_Y        16
-#define ROUND_MAX_MISSING_FRAMES    8
-#define ROUND_CAMERA_TIMEOUT_TICKS 25   // 20ms, confirmed roundabout only
-#define ROUND_PHASE_TIMEOUT_TICKS 750   // 15 seconds of motion without stage progress
-#define ROUND_TOTAL_TIMEOUT_TICKS 2000  // 40 seconds of motion, then stop
-#define ROUND_COOLDOWN_FRAMES      20
-#define ROUND_SPEED_MAX            70.0f
-
+/* VIS7 geometry thresholds live in island.h; these limits only stop on faults. */
+#define ROUND_CAMERA_TIMEOUT_TICKS 25U
+#define ROUND_PHASE_TIMEOUT_TICKS 750U
+#define ROUND_TOTAL_TIMEOUT_TICKS 2000U
+#define ROUND_SPEED_MAX 70.0f
 typedef enum {
     ROUND_NORMAL=0, ROUND_APPROACH=1, ROUND_WAIT_ENTRY=2,
     ROUND_ENTER=3, ROUND_INSIDE=4, ROUND_EXIT=5,

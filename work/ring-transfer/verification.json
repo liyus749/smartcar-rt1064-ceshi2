@@ -1,0 +1,30 @@
+{
+  "destination": "E:\\ceshi\\smartcar-rt1064-diankong",
+  "ring_source": "E:\\ceshi\\island",
+  "existing_files_changed": [
+    "README.md",
+    "project/restore_s1_R1/code/island.c",
+    "project/restore_s1_R1/code/island.h",
+    "project/restore_s1_R1/code/Roundabout.c",
+    "project/restore_s1_R1/code/Roundabout.h"
+  ],
+  "unchanged_baseline_files": 625,
+  "ring_source_sha256": {
+    "project/restore_s1_R1/code/island.c": "9595bac7f5a5417d681fdf50bbebc251b1da095ea6c203ad0bfee51465550790",
+    "project/restore_s1_R1/code/island.h": "e5b08923a9655735b926c66e3699e4438b096f0ac33eb8284e199d89ac70c9e4",
+    "project/restore_s1_R1/code/Roundabout.c": "beab53d6376048d87c83a3b70d09c9032da91c5f15f544cfde61e1a065e6658f",
+    "project/restore_s1_R1/code/Roundabout.h": "30ec0c12e5e621bcd76ab2dce49e76dbfa6e74749d0843878045827f64f923df"
+  },
+  "firmware_sha256": "d1b128e4392069f0b207bb8995e3a16ee8831d4249eb85a66495eec1adaa2370",
+  "build_result": "0 errors, 2 pre-existing SDK float-option warnings",
+  "checks": [
+    "358 VIS7 image/geometry checks",
+    "full ring adapter with actual LineDetect/Cross/Err",
+    "synthetic-frame completion handoff",
+    "original key control",
+    "original display",
+    "original motor/differential integration",
+    "original curve control",
+    "original servo control"
+  ]
+}
