@@ -1,34 +1,45 @@
 {
-  "version": "AUTO180 R2",
-  "date": "2026-10-29",
+  "version": "KEY RUN R3",
+  "date": "2026-10-31",
   "compiler": "ARMCLANG 6.24",
   "target": "nor_sdram_zf_dtcm",
   "project": "project/mdk/rt1064.uvprojx",
   "entry": "project/restore_s1_R1/user/src/main.c",
-  "sha256": "4a49a227965f504b8c26a20c0310b087ead027f2758475960b5490391e8086ff",
-  "build": "0 errors; 2 SDK debug-console finite-math warnings",
+  "firmware": "firmware/rt1064_keys_R3.axf",
+  "sha256": "c777f593c5a2a9f5c2a6bc09d90a0a6173b550b4b9270eead7bd12d95a760041",
+  "bytes": 1226588,
+  "build": "0 errors; 2 existing SDK debug-console finite-math warnings",
   "runtime": {
     "default_spd": 180,
-    "automatic_start": "once, after initialization and first usable camera frame",
+    "automatic_start": false,
+    "wireless": false,
     "curve_speed_reduction": true,
     "differential": true,
-    "emergency_stop": "S1=0!",
-    "wave_channels": [
-      "ErrUse",
-      "encoder_left",
-      "encoder_right",
-      "base_SPD"
-    ]
+    "binary_camera_display": true,
+    "key_start_stop": "C13 / KEY3",
+    "key_select": "C12 / KEY4: SPD -> P -> D",
+    "key_decrease": "C15 / KEY1",
+    "key_increase": "C14 / KEY2",
+    "spd_step": 5,
+    "spd_range": [
+      70,
+      240
+    ],
+    "servo_pd_step": 0.02,
+    "servo_p_default": 1.8,
+    "servo_d_default": 2.0,
+    "image_stop_timeout_ms": 500,
+    "restart_after_fault": "C13 with valid image"
   },
   "tests": [
-    "run_wireless_track_tests.py",
+    "run_key_control_tests.py",
     "run_simple_display_tests.py",
-    "run_curve_control_tests.py",
     "run_track_diff_integration_tests.py",
-    "run_steering_tests.py",
-    "run_servo_output_test.py"
+    "run_curve_control_tests.py",
+    "run_steering_tests.py"
   ],
   "physical_validation": "not performed by the assistant",
+  "source_hash_format": "SHA256 of source bytes with CRLF normalized to LF",
   "source_sha256": {
     "project/restore_s1_R1/code/Assistant.c": "cf76d55dae6bbca53371acef86850d7bc1cd5342227d0243e9d27f1963af4450",
     "project/restore_s1_R1/code/Camera.c": "569b6e54f6ec58491b633688cdd2fe403573f91f6684a2652a143b5c687ffdb5",
@@ -44,7 +55,7 @@
     "project/restore_s1_R1/code/MotorTune.c": "f97e8b55b16e1dd803d7a846912d40a76432ac39085c3aeccb8b6e7b41a862ef",
     "project/restore_s1_R1/code/PID.c": "d8874a2111a7798d412d6b86fc8a7568d476d762a274a10fd9a8c9abd94a3e7b",
     "project/restore_s1_R1/code/Roundabout.c": "ecaff40f36141f006740641c585d2b1a331048c340ae757bfe389b348e7212a0",
-    "project/restore_s1_R1/code/Screen.c": "8dbe57319bbaa1397c47847f26535959470fac23de09194c6e355fb4d3d5bc22",
+    "project/restore_s1_R1/code/Screen.c": "2652ae6ff5e7c0c48f63b81391b1eeeee0d4cb284d687baacac546f8e5c0109b",
     "project/restore_s1_R1/code/seekfree_assistant.c": "a606cb556b8a632a47cbc54d6122864b8bffc613f330f83b6291468b2b31a844",
     "project/restore_s1_R1/code/seekfree_assistant_interface.c": "bc02372faa8af1bae65f8d412d9f581cb0fad91736b38f308fd119df9be00d27",
     "project/restore_s1_R1/code/Servo.c": "d7e2e792127eea1eeb49abf75793e158843caf88b38a0d25418b18d17fe57892",
@@ -64,21 +75,22 @@
     "project/restore_s1_R1/code/MotorTune.h": "444672b62c648d5179c3f83c71ac4c6d59db8dd4ed9c0902281f71a756140097",
     "project/restore_s1_R1/code/PID.h": "e035927a3fd25a1b2546c4b68ab3eda133160ad2dc9fe8acc21971ab92047746",
     "project/restore_s1_R1/code/Roundabout.h": "dd8fd57fe3275ed2d9c7a87f870304b85e6c2de9c9439c4a053c904a76037c99",
-    "project/restore_s1_R1/code/Screen.h": "cff5f1c59de8213c5427913e9c9ce20003f9ce7b0a4f017f4b80d71b44757755",
+    "project/restore_s1_R1/code/Screen.h": "3657007e09c51076a71c3afb566b5f667e49ce081323707b813af0cdecfbc0de",
     "project/restore_s1_R1/code/seekfree_assistant.h": "c16fad54abc86f85efc1a6ea1572dc79165ea068f21f9a202ea5d4f1d8b4ff02",
     "project/restore_s1_R1/code/seekfree_assistant_interface.h": "821885cd7252539e2cd48e519003c6f9120d647e82734f5742b4d6745058341f",
     "project/restore_s1_R1/code/Servo.h": "d2112e6d79876861bb567b31861f61cd44a6ba36f32ff24a802254de4117eaf7",
     "project/restore_s1_R1/code/TrackRemote.h": "e65fe479cd6081d052562f94d7bad5cd5fbaa1122f0416109926f2571ae1fe30",
     "project/restore_s1_R1/code/Vofa.h": "4e64bb677ccca5b750e0201f856664e9a7cdc8a14fe52c49743dcccba83356e9",
     "project/restore_s1_R1/user/src/isr.c": "7e6268818baffdbf07f2477bd92cd4c3fdccdf00b9026594ca4c25a212e1c9ed",
-    "project/restore_s1_R1/user/src/main.c": "9ee2c8a0bc91035bda1f4dc128378ba0d14d436c89d6f67380cbee929f1fa7a8",
+    "project/restore_s1_R1/user/src/main.c": "73b7492550ca9be122bfe46e53adb6f417c3f52a87e2fae07c0b567d900aa652",
     "project/restore_s1_R1/user/inc/isr.h": "71c791b4b2c40a6806adef4a6fc31daf5b74cde26a7ddeab44629ea095188ec6",
     "libraries/zf_device/zf_device_wireless_uart.c": "30369c04f33dfd6bb0d21bb5f978b502ea528772c43d76da8711aa047963f747",
     "libraries/zf_device/zf_device_wireless_uart.h": "1caf81b56fd02a96fbc031f8e33c6c14a03c987ead4fdf19ec742b3ea2320797",
     "libraries/zf_driver/zf_driver_usb_cdc.c": "845e83b8c42e275f7a1d78554750fdc675d35a8b8436cee9ac99c1e1b215e907",
     "libraries/zf_driver/zf_driver_usb_cdc.h": "1a42bc3db10ccd30e818018d3e76813a681f8f8c0296403ecfc2f9bf8f026375",
-    "project/mdk/rt1064.uvprojx": "75bf3bca0f1e60a33b8f2e0b9374f4a03249b94a35476747ffe3ce3f5e699bbd"
-  },
-  "source_hash_format": "SHA256 of source bytes with CRLF normalized to LF (portable across Git checkouts)",
-  "local_backup": "_已移除_旧文件备份/自动发车180修改前_20261029_01.zip (local only)"
+    "project/mdk/rt1064.uvprojx": "720430f7caf40a22bcb28e4cbc553e28797afd637806bc877497ecc63aea2766",
+    "tests/run_key_control_tests.py": "650c07a266c29abe1e6a4382104a5992e43cfeaa88081b30637dcf176ff16b54",
+    "tests/run_simple_display_tests.py": "53286f0863719a7924e4c862d5cc92fc7f04082dc1068adae2425179056b4125",
+    "tests/run_track_diff_integration_tests.py": "04e85bf493fae2c13b790fac8f283dd9b4ec4026dc72e136bc1f46b017c99607"
+  }
 }

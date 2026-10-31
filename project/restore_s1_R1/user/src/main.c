@@ -2,43 +2,13 @@
 * 文件名称          main.c
 * 功能简介          弯道、十字与纯图像左右环岛循迹；屏幕显示BIN二值图和边线
 *
-* 硬件              RT1064核心板 + 自制扩展板PCB2 + IPS200 SPI屏 + U12无线串口模块
-*
-* ================================ 整体流程 ================================
-*   上电 -> 初始化外设/无线 -> 开控制中断（禁发车）-> 摄像头 -> 主循环（有效图像后自动发车）
-*
-*   主循环里只做两件事：
-*     1. VOFA文字命令启停/调P、D、电机PID；只发送偏差、左右编码器、SPD共4通道
-*     2. 摄像头新帧 -> 巡线 -> 十字/环岛互斥处理 -> 算偏差 -> 屏幕二值图
-*
-*   两个定时中断：
-*     pit_handler1（10ms）编码器；USE_RUN_KEYS=0不扫描未安装按键
-*     pit_handler0（20ms）电机增量式 PID + 舵机 PD + 心跳灯
-*
-* ================================ VOFA无线控制 ================================
-*   Serial / 460800 / 8N1 / FireWater；图像在本地屏幕，波形在VOFA。
-*   只配置7条Str命令：S1=%f!、P1=%f!、D1=%f!、P2=%f!、I2=%f!、D2=%f!、V1=%f!
-*   S1保留手动停车/重启；P1/D1舵机；P2/I2/D2电机；V1基础速度70~240，默认180；无需S1发车。
-*   不要求心跳，不调参也可持续循迹；500ms无有效图像停车。
-*   详细通道、屏幕与停车码见 docs/VOFA_无线循迹控制.md。
-*   USE_REMOTE_CONTROL=0保留原逐飞助手二进制接收，不能与文字接收同时启用。
-*
-* ================================ B9 蓝灯灯语 ================================
-*   快闪 3 下        上电自检：程序跑起来了
-*   常亮 0.5 秒      无线串口初始化成功
-*   快闪 10 下       无线串口初始化失败（检查无线模块插好没有）
-*   双闪             摄像头初始化失败，正在重试（检查 CSI 排线）
-*   一秒闪一下       正在跑（20ms 控制中断的心跳）
-*   灭               没在跑 / 已经停了
-*
-* ================================ 接线（和主板丝印一致）================================
-*   舵机         -> 新板 H5（顶端最右舵机口）信号 C30
-*   编码器 左/右 -> 编码器 1/2        C0+C1 / C2+C24
-*   电机         -> 左轮 D3(正)+D2(反)；右轮 C11(正)+C10(反)（按单轮实测映射）
-*   摄像头       -> 摄像头 CSI        PCLK B20 / VSY B22 / D0-D7 B31~B24 / SCCB C29+C28
-*   屏幕         -> 屏幕接口          SCL B0 / SDA B1 / RST B2 / DC C19 / CS B3 / BL C18
-*   姿态传感器   -> 姿态传感器接口    SCK C23 / MOSI C22 / MISO C21 / CS C20
-*   无线串口模块 -> 新板 U12          TX D16 / RX D17 / RTS D26（UART8）
+* 硬件              RT1064 + 逐飞主板 + IPS200 SPI屏；无需无线模块
+* 上电停车，C13单独启停；C12循环选择SPD/P/D；C15减、C14加。
+* SPD默认180、步进5、范围70~240；P/D默认1.80/2.00、步进0.02。
+* 二值图+边线；显示左右编码器实际/目标、十字/环岛、丢图/停车原因与舵机PWM。
+* C15/C14/C13/C12 对应 KEY1/KEY2/KEY3/KEY4，按低电平有效，30ms消抖。
+* 编码器：左C0/C1，右C2/C24；舵机C30，屏幕SPI引脚保持原定义。
+* 20ms速度闭环+舵机PD，10ms编码器/按键；有效图像超时500ms停车，需重新按C13。
 ********************************************************************************************************************/
 
 #include "zf_common_headfile.h"
@@ -65,7 +35,7 @@
 
 #define CAM_EXPOSURE        (512)      // 摄像头曝光：发白/反光调小(400/350)，远处太暗调大(600+)
 
-// 舵机 PD 默认值（可在逐飞助手通道 4/5 在线改）
+// 舵机PD：按键选择P/D再调整
 #define SERVO_P_DEFAULT     (1.80f)
 #define SERVO_P_KEY_STEP    (0.02f)     // C15/C14 调P时每次增减0.02
 #define SERVO_P_MIN         (0.0f)
@@ -76,9 +46,9 @@
 #define SERVO_D_MIN         (0.0f)
 #define SERVO_D_MAX         (50.0f)
 
-// 电机速度环默认值（可在逐飞助手通道 0/1/2/3 在线改）
-#define SPEED_DEFAULT       (180.0f)    // 默认基础目标；无线V1可调，弯道/十字仍自动降速
-#define SPEED_KEY_STEP      (5.0f)     // 仅保留给架空差速测试模式的调速
+// 电机速度环保留原PID参数；SPD可按键调整
+#define SPEED_DEFAULT       (180.0f)    // 默认基础目标180；按键调速，弯道/十字仍自动降速
+#define SPEED_KEY_STEP      (5.0f)     // SPD按键每次加减5
 #define SPEED_KEY_MIN       (70.0f)
 #define SPEED_KEY_MAX       (240.0f)
 #define SPEED_KEY_LONG_SCANS (100)     // 仅架空测试：每10ms扫描，长按约1秒
@@ -86,7 +56,7 @@
 #define SPEED_KI_DEFAULT    (MOTORPID_DEFAULT_KI)
 #define SPEED_KD_DEFAULT    (MOTORPID_DEFAULT_KD)
 
-#define RUN_AUTO_START      (1)        // 初始化完成且出现有效图像后自动循迹，无需S1发车
+#define RUN_AUTO_START      (0)        // 上电停车，C13发车
 #define MOTOR_DIAGNOSTIC_MODE (0)      // 0循迹；1单轮；2差速验证；3核心板Type-C电机PID调参
 
 #define DIFF_TEST_TARGET       (100.0f)  // 验证版上电速度，可停车按 C12 调整
@@ -97,9 +67,10 @@
 #define DIFF_TEST_STALL_START  (75)    // 启动 1.5 秒后检查编码器
 #define DIFF_TEST_STALL_TICKS  (25)    // 一侧连续低于 3 计数达 0.5 秒就停
 
-#define USE_SCREEN          (1)        // 新板启用IPS200，显示BIN二值图、状态和参数
-#define USE_RUN_KEYS        (0)        // 新板无C12~C15按键；以后安装并接线后设1
-#define USE_REMOTE_CONTROL  (1)        // U12无线串口：VOFA文字命令和FireWater波形
+#define USE_SCREEN          (1)        // 逐飞主板IPS200显示二值图、参数和元素状态
+#define USE_RUN_KEYS        (1)        // 逐飞主板 C15/C14/C13/C12
+#define USE_REMOTE_CONTROL  (0)        // 不使用无线VOFA
+#define USE_ASSISTANT       (0)        // 无线模块完全停用，不初始化/接收/发送
 #define USE_ISLAND          (1)        // 新版纯摄像头左右环岛；不调用旧陀螺仪环岛状态机
 #define USE_LEGACY_GYRO     (0)        // 当前纯图像环岛不需要IMU；不误初始化IMU660RA驱动
 #define ISLAND_SLOW_RATIO   (0.6f)     // 进环岛后目标速度降到 60%
@@ -158,7 +129,7 @@ extern volatile int   Island_State;
 //===================================================================================================================
 
 // 可在线调参数（主循环从助手写进来，中断里读）
-static volatile float run_speed    = SPEED_DEFAULT; // 无线V1调基础速度，默认180
+static volatile float run_speed    = SPEED_DEFAULT; // 按键调基础速度，默认180
 static volatile float run_kp       = SPEED_KP_DEFAULT;
 static volatile float run_ki       = SPEED_KI_DEFAULT;
 static volatile float run_kd       = SPEED_KD_DEFAULT;
@@ -283,16 +254,21 @@ static void Run_RemoteService(void)
 static const gpio_pin_enum run_key_pins[4] = {C15, C14, C13, C12};
 static uint8 run_key_stable[4];
 static uint8 run_key_count[4];
-static volatile uint8 run_tune_d;       // 0选P，1选D；只选择调节项，两项始终一起参与PD
+static volatile uint8 run_tune_item; // 0 SPD, 1 P, 2 D
+#define RUN_IMAGE_TIMEOUT_TICKS (25) // 500ms at 20ms
+static volatile uint8 run_key_image_age = RUN_IMAGE_TIMEOUT_TICKS;
+static volatile uint8 run_key_fault; // 0 none/manual, 1 no valid image, 2 roundabout fault
 
 static void Run_KeysInit(void)
 {
     uint8 i;
     key_init(10);
-    run_tune_d = 0;
+    run_tune_item = 0;
+    run_key_image_age = RUN_IMAGE_TIMEOUT_TICKS;
+    run_key_fault = 0;
     for(i = 0; i < 4; i++)
     {
-        // 上电时已按住的键先松开再使用，不误发车、不误切换调节项。
+        // Held at power-on: release before accepting a new press.
         run_key_stable[i] = (GPIO_LOW == gpio_get_level(run_key_pins[i]));
         run_key_count[i] = 0;
     }
@@ -300,21 +276,55 @@ static void Run_KeysInit(void)
 
 static float Run_ClampGain(float value, float minimum, float maximum)
 {
-    if(!(value >= minimum)) { value = minimum; } // 包含NaN
+    if(!(value >= minimum)) { value = minimum; }
     if(value > maximum) { value = maximum; }
     return value;
 }
 
 static void Run_AdjustGain(int direction)
 {
-    volatile float *gain = run_tune_d ? &run_d : &run_p;
-    float minimum = run_tune_d ? SERVO_D_MIN : SERVO_P_MIN;
-    float maximum = run_tune_d ? SERVO_D_MAX : SERVO_P_MAX;
-    float step = run_tune_d ? SERVO_D_KEY_STEP : SERVO_P_KEY_STEP;
-    int cents = (int)(Run_ClampGain(*gain, minimum, maximum)*100.0f+0.5f);
-    // 用整数百分位加减，避免多次0.02累加后屏幕少0.01。
+    volatile float *gain;
+    float minimum, maximum, step;
+    int cents;
+    if(run_tune_item == 0)
+    {
+        run_speed = Run_ClampGain(run_speed + direction*SPEED_KEY_STEP,
+                                 SPEED_KEY_MIN, SPEED_KEY_MAX);
+        return;
+    }
+    gain = (run_tune_item == 2) ? &run_d : &run_p;
+    minimum = (run_tune_item == 2) ? SERVO_D_MIN : SERVO_P_MIN;
+    maximum = (run_tune_item == 2) ? SERVO_D_MAX : SERVO_P_MAX;
+    step = (run_tune_item == 2) ? SERVO_D_KEY_STEP : SERVO_P_KEY_STEP;
+    cents = (int)(Run_ClampGain(*gain, minimum, maximum)*100.0f+0.5f);
     cents += direction*(int)(step*100.0f+0.5f);
     *gain = Run_ClampGain((float)cents/100.0f, minimum, maximum);
+}
+
+static void Run_KeyStop(uint8 fault)
+{
+    run_switch = 0.0f;
+    run_auto_pending = 0;
+    run_key_fault = fault;
+    MotorPID_SetEnable(0);
+    Servo_Steer(0);
+    dbg_duty = 0;
+}
+
+// Independent of wireless: camera protection remains active with the module removed.
+static void Run_KeyTick20ms(void)
+{
+    if(run_key_image_age < RUN_IMAGE_TIMEOUT_TICKS) { run_key_image_age++; }
+    if(run_switch > 0.5f && run_key_image_age >= RUN_IMAGE_TIMEOUT_TICKS)
+    {
+        Run_KeyStop(1);
+    }
+}
+
+static void Run_KeyFrame(uint8 usable)
+{
+    // A byte store is atomic; invalid frames never refresh the valid-image watchdog.
+    if(usable) { run_key_image_age = 0; }
 }
 
 static void Run_Keys10ms(void)
@@ -332,33 +342,27 @@ static void Run_Keys10ms(void)
             if(pressed) { pressed_events |= (uint8)(1u << i); }
         }
     }
-
-    // C13优先：稳定按下一次只启停一次，同时按下的调节/选择动作取消。
+    // C13 has priority over selection and adjustment. No long-press repeat.
     if(pressed_events & 4u)
     {
-        if(run_switch > 0.5f)
-        {
-            run_switch = 0.0f;
-            MotorPID_SetEnable(0);
-            Servo_Steer(0);
-            dbg_duty = 0;
-        }
-        else
+        if(run_switch > 0.5f) { Run_KeyStop(0); }
+        else if(run_enable > 0.0f && run_key_image_age < RUN_IMAGE_TIMEOUT_TICKS)
         {
 #if USE_ISLAND
             if(Roundabout_GetFault()) { Roundabout_Retry(); }
 #endif
+            run_auto_pending = 0;
+            run_key_fault = 0;
             run_switch = 1.0f;
         }
+        else { Run_KeyStop(1); }
         return;
     }
-    // C12按下一次切换P/D，长按不连切；切换时不同时增减参数。
     if(pressed_events & 8u)
     {
-        run_tune_d = run_tune_d ? 0 : 1;
+        run_tune_item = (uint8)((run_tune_item + 1u) % 3u);
         return;
     }
-    // C15减、C14加；两个调节键同时按住时忽略，不长按连发。
     if(((pressed_events & 3u) == 1u) && !run_key_stable[1]) { Run_AdjustGain(-1); }
     else if(((pressed_events & 3u) == 2u) && !run_key_stable[0]) { Run_AdjustGain(1); }
 }
@@ -384,6 +388,23 @@ static void Run_FormatD(float value, char text[6])
     text[5] = 0;
 }
 // END RUN KEY CONTROL
+
+#if USE_RUN_KEYS && USE_SCREEN
+static void Run_KeyDisplayService(void)
+{
+    static int last_run = -1, last_lost = -1, last_fault = -1;
+    int running = (run_enable > 0.0f && run_switch > 0.5f);
+    int lost = (Img_Disappear_Flag || run_key_image_age >= RUN_IMAGE_TIMEOUT_TICKS);
+    int fault = run_key_fault;
+    if(running != last_run || lost != last_lost || fault != last_fault)
+    {
+        Screen_ShowRunState((uint8)running, 0);
+        Screen_ShowHealth((uint8)lost, (uint8)fault);
+        last_run=running; last_lost=lost; last_fault=fault;
+    }
+}
+#endif
+
 
 // BEGIN STEERING BOOST
 static float Steering_Boost(float error)
@@ -891,6 +912,9 @@ void pit_handler0(void)
     DiffTest_Control20ms();
     return;
 #endif
+#if USE_RUN_KEYS && !USE_REMOTE_CONTROL
+    Run_KeyTick20ms();
+#endif
 #if USE_REMOTE_CONTROL
     {
         uint8 reason=TrackRemote_Tick20ms((uint8)(run_enable>0.0f && run_switch>0.5f));
@@ -901,6 +925,9 @@ void pit_handler0(void)
     Roundabout_Tick20ms((uint8)(run_enable>0.0f && run_switch>0.5f));
     if(Roundabout_GetFault() && !Roundabout_ResetPending())
     {
+#if USE_RUN_KEYS
+        run_key_fault = 2;
+#endif
 #if USE_REMOTE_CONTROL
         if(run_switch>0.5f) { Run_RemoteStop(REMOTE_REASON_ROUNDABOUT); }
 #endif
@@ -1047,7 +1074,7 @@ static void Frame_Process(const uint8 *gray)
 {
     int   i;
     uint8 line_mode;
-#if !USE_REMOTE_CONTROL
+#if USE_ASSISTANT
     float wave[ASSISTANT_OSC_CH_MAX];
 #endif
 
@@ -1072,6 +1099,9 @@ static void Frame_Process(const uint8 *gray)
     }
 #if USE_REMOTE_CONTROL
     TrackRemote_Frame((uint8)!Img_Disappear_Flag);
+#endif
+#if USE_RUN_KEYS
+    Run_KeyFrame((uint8)!Img_Disappear_Flag);
 #endif
     Run_AutoStartTry((uint8)!Img_Disappear_Flag);
 
@@ -1120,12 +1150,16 @@ static void Frame_Process(const uint8 *gray)
         Screen_ShowDriving(ErrUse, (int)run_speed, p_text, d_text,
                            enc_l, (int)MotorPID_GetTargetLeft(),
                            enc_r, (int)MotorPID_GetTargetRight(),
-                           (uint8)(run_switch > 0.5f), run_auto_pending);
+                           (uint8)(run_enable > 0.0f && run_switch > 0.5f), 0);
+        Screen_ShowTrackFlags(Cross_Flag, (int)Cross_GetState(), Island_State,
+                             Roundabout_GetDirection(),
+                             (uint8)(Img_Disappear_Flag || run_key_image_age >= RUN_IMAGE_TIMEOUT_TICKS),
+                             run_key_fault, Servo_GetDuty(), run_tune_item);
     }
 #endif
 
     /* 6. 发波形 + 边线 + 图像给逐飞助手 */
-#if !USE_REMOTE_CONTROL
+#if USE_ASSISTANT
     wave[0] = ErrUse;
     wave[1] = (float)Servo_GetAngle();
     wave[2] = (float)enc_l;
@@ -1593,10 +1627,11 @@ int main(void)
     Screen_Init();
 #endif
 
-    /* 无线串口只由一个协议模块初始化和读取。 */
+    /* 不使用无线时，两个初始化分支均跳过。 */
+#if USE_REMOTE_CONTROL || USE_ASSISTANT
 #if USE_REMOTE_CONTROL
     if(0 != TrackRemote_Init())
-#else
+#elif USE_ASSISTANT
     if(0 != Assistant_Init())
 #endif
     {
@@ -1612,6 +1647,8 @@ int main(void)
         system_delay_ms(500);
         gpio_set_level(B9, GPIO_HIGH);
     }
+
+#endif // USE_REMOTE_CONTROL || USE_ASSISTANT
 
 #if USE_REMOTE_CONTROL
     /* 摄像头初始化失败时仍有波形和收命令；run_enable=0禁止发车。 */
@@ -1674,10 +1711,13 @@ int main(void)
 
     while(1)
     {
-        /* 1. 收逐飞助手参数 */
+#if USE_RUN_KEYS && USE_SCREEN
+        Run_KeyDisplayService();
+#endif
+        /* 1. 可选的无线参数；当前按键版均关闭。 */
 #if USE_REMOTE_CONTROL
         Run_RemoteService();
-#else
+#elif USE_ASSISTANT
         Assistant_Poll();
 
         /* 2. 把新参数搬进全局变量（中断里读的就是这些）*/

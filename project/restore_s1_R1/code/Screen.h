@@ -74,6 +74,11 @@ void Screen_ShowDriving(float err, int speed, const char *p, const char *d,
                         int left, int left_target, int right, int right_target,
                         uint8 running, uint8 waiting);
 
+// 元素状态与故障；selected 0=SPD/1=P/2=D；编码器值为计数/10ms。
+void Screen_ShowHealth(uint8 lost, uint8 fault);
+void Screen_ShowTrackFlags(int cross, int cross_state, int island, int direction,
+                          uint8 lost, uint8 fault, int pwm, uint8 selected);
+
 //-------------------------------------------------------------------------------------------------------------------
 // 函数简介     显示一帧：摄像头图像 + 左/中/右边界 + 画面中心参考虚线
 // 参数说明     gray        灰度原图      传 mt9v03x_image[0]

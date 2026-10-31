@@ -12,6 +12,9 @@ main_source = (project_dir / main_path.replace("\\", "/")).resolve()
 code_dir = main_source.parents[2] / "code"
 source = main_source.read_text(encoding="utf-8")
 names = (
+    "SERVO_D_DEFAULT", "SERVO_P_KEY_STEP", "SERVO_D_KEY_STEP", "SERVO_P_MIN", "SERVO_P_MAX",
+    "SERVO_D_MIN", "SERVO_D_MAX", "RUN_KEY_DEBOUNCE_SCANS", "RUN_AUTO_START",
+    "SPEED_KEY_STEP", "SPEED_KEY_MIN", "SPEED_KEY_MAX", "USE_RUN_KEYS", "USE_REMOTE_CONTROL",
     "SPEED_DEFAULT", "USE_ISLAND", "ISLAND_SLOW_RATIO", "CROSS_SLOW_RATIO", "TURN_SLOW_MEDIUM", "TURN_SLOW_SHARP",
     "TURN_MEDIUM_LIMIT", "TURN_SHARP_LIMIT", "TURN_SPEED_MEDIUM_MAX",
     "TURN_SPEED_SHARP_MAX", "STEER_LIMIT_HOLD_TICKS", "STEER_DEADBAND",
@@ -75,6 +78,15 @@ void Motor_Set(int left,int right) {
 void Motor_Stop(void) { pwm_l=pwm_r=0; }
 void gpio_toggle_level(int pin) { assert(pin==B9); }
 """
+KEY_STUB = r"""
+typedef int gpio_pin_enum;
+enum {C15,C14,C13,C12};
+#define GPIO_LOW 0
+static uint8 run_auto_pending;
+void key_init(int period) { assert(period==10); }
+int gpio_get_level(int pin) { (void)pin;return 1; }
+void Roundabout_Retry(void) { round_fault=0;round_pending=1; }
+"""
 TEST = r"""
 static void near(float a,float b) { assert(fabsf(a-b)<0.002f); }
 static void tick(void) {
@@ -86,6 +98,7 @@ static void tick(void) {
 static void frames(float error,int count) {
     while(count--) {
         ErrUse=error;
+        Run_KeyFrame((uint8)!Img_Disappear_Flag);
         Run_ErrorDiffFrame(error,error,!Cross_Flag && !Img_Disappear_Flag && run_switch>0.5f);
         tick();tick();
     }
@@ -135,6 +148,14 @@ int main(void) {
     round_fault=1;tick();assert(run_switch==0 && !pwm_l && !pwm_r && servo_duty==790);
     round_pending=1;run_switch=1;tick();assert(!pwm_l && !pwm_r && dbg_duty==0);
     round_fault=round_pending=0;Island_State=0;frames(0,60);assert(MotorPID_IsEnabled());
+    /* Physical-key build watchdog must stop real PID outputs with no new frame. */
+    assert(USE_RUN_KEYS && !USE_REMOTE_CONTROL && !RUN_AUTO_START);
+    for(int i=0;i<RUN_IMAGE_TIMEOUT_TICKS;i++) tick();
+    assert(!run_switch && run_key_fault==1 && !pwm_l && !pwm_r && !MotorPID_IsEnabled());
+    assert(servo_duty==790);
+    frames(0,5);assert(!run_switch && !pwm_l && !pwm_r); // no auto restart
+    run_switch=1;frames(0,60);assert(MotorPID_IsEnabled());
+    Run_KeyStop(0);assert(!MotorPID_IsEnabled() && !pwm_l && !pwm_r && servo_duty==790);
     puts("PASS: real image gate -> normal ISR -> real MotorPID, straight180, 70/112 left and right, earlier assist, invalid/cross/stale/recenter release and stop");
     return 0;
 }
@@ -142,11 +163,11 @@ int main(void) {
 with tempfile.TemporaryDirectory(prefix="rt1064_track_diff_") as directory:
     build = Path(directory)
     (build / "zf_common_headfile.h").write_text(STUB, encoding="utf-8")
-    (build / "check.c").write_text(config + PREFIX + block("STEERING BOOST") +
+    (build / "check.c").write_text(config + PREFIX + KEY_STUB + block("RUN KEY CONTROL") + block("STEERING BOOST") +
                                    block("RUN CURVE CONTROL") + controller + TEST,
                                    encoding="utf-8")
     executable = build / "check.exe"
-    subprocess.run(["gcc", "-std=c99", "-O2", "-Wall", "-Wextra", "-Werror",
+    subprocess.run(["gcc", "-std=c99", "-O2", "-Wall", "-Wextra", "-Werror", "-Wno-unused-function",
                     "-I", str(build), "-I", str(code_dir),
                     str(build / "check.c"), str(code_dir / "MotorPID.c"),
                     "-o", str(executable)], check=True)

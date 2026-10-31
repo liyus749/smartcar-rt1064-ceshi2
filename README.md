@@ -1,44 +1,20 @@
-# RT1064 智能车：AUTO180 R2
+# RT1064 智能车：KEY RUN R3
 
-当前默认版本：基础SPD180，初始化完成并取得首帧有效摄像头图像后自动循迹，无需S1发车。弯道降速、差速、十字和纯图像环岛继续生效。烧录后上电会自动起步，屏幕显示 `AUTO180 R2`。
+当前默认版本改回逐飞主板按键控制，无线模块关闭。上电停车，C13启动/停止；C12循环选择SPD/P/D，C15减、C14加。基础SPD180、每次±5；舵机P1.80/D2.00，每次±0.02。参数断电恢复默认。
 
 ## 编译与烧录
 
-打开 `project/mdk/rt1064.uvprojx`，目标 `nor_sdram_zf_dtcm`，使用Keil ARMCLANG 6.24及项目声明的NXP RT1064器件包编译、下载。项目当前引用 `project/restore_s1_R1/code/` 与 `project/restore_s1_R1/user/` 中的活动源码；该目录名称沿用之前回退配置。当前入口为 [main.c](project/restore_s1_R1/user/src/main.c)。修改其他目录中的同名文件不会改变这个构建。
+Keil工程 `project/mdk/rt1064.uvprojx`，目标 `nor_sdram_zf_dtcm`，ARMCLANG 6.24。活动源码为 `project/restore_s1_R1/code/` 和 `project/restore_s1_R1/user/`，目录名沿用旧版本。编译输出 `project/mdk/Objects/keys_R3/rt1064_keys_R3.axf`。可直接烧录 [KEY RUN R3固件](firmware/rt1064_keys_R3.axf)，屏幕显示 `KEY RUN R3`。
 
-编译输出为 `project/mdk/Objects/auto180/rt1064_auto180.axf`。仓库另提供 [已编译固件](firmware/rt1064_auto180.axf) 及同目录的构建清单；本机Objects目录不提交到Git。
+屏幕显示二值图、ERR、SPD、舵机P/D、左右编码器实际/目标、舵机PWM、十字Cr/Cs、环岛Is/Dir、CAM及停车原因。弯道降速、差速和十字/环岛控制保留。编码器为计数/10ms，不是RPM；基础SPD不同于弯道中每轮的实际目标。
 
-硬件：逐飞RT1064、MT9V03X摄像头、IPS200 SPI屏、U12无线串口、左右独立电机闭环。舵机必须接R12对应的H5/C30三针口，白线C30、红线电源、黑线GND；中位790、左870、右715。
+详细键位、标志位和操作见[逐飞主板按键说明](docs/逐飞主板_按键循迹R3.md)。构建与源文件校验见 `firmware/manifest.json`。
 
-## 自动发车与无线参数
+## 验证
 
-上电先初始化，再等待有效图像；取得有效图像后自动启动一次。没有图像时不发车。手动停车或图像/环岛故障停车后，不因图像恢复自行重启；可重新上电，或图像正常时发送 `S1=1!` 恢复。`S1=0!` 保留为可选停车命令，VOFA无需放置发车开关，也不要循环发送停车命令。
+- `python tests/run_key_control_tests.py`：真实按键代码、参数边界、消抖/长按、启停优先级、丢图停车锁定。
+- `python tests/run_simple_display_tests.py`：真实显示代码的数据、选择标记、标志位和240×320布局边界。
+- `python tests/run_track_diff_integration_tests.py`：按键/图像超时、控制中断和真实MotorPID集成。
+- `python tests/run_curve_control_tests.py`、`python tests/run_steering_tests.py`：弯道/差速和舵机控制。
 
-VOFA选择Serial、460800、8N1、FireWater。发送使用Str/ASCII，每条以 `!` 结束；不要求心跳。
-
-| 命令控件 | 命令 | 默认值 |
-| --- | --- | --- |
-| 舵机P | `P1=%f!` | 1.80 |
-| 舵机D | `D1=%f!` | 2.00 |
-| 电机P | `P2=%f!` | 8.00 |
-| 电机I | `I2=%f!` | 0.15 |
-| 电机D | `D2=%f!` | 0.00 |
-| 基础SPD | `V1=%f!` | 180 |
-
-参数保存在RAM，重新上电恢复默认值。舵机P/D控件可用0.02步进；V1范围70～240。
-
-仅发送4路波形：CH0图像偏差ErrUse、CH1左编码器、CH2右编码器、CH3基础SPD。编码器单位为计数/10ms，不是RPM。基础SPD不等于弯道中左右轮各自的目标。
-
-## 精简显示屏
-
-保留摄像头二值图和边线；下方仅显示SPD/图像偏差、舵机P/D、左轮实际/目标、右轮实际/目标，以及RUN/WAIT/STOP状态。移除接收计数、限位、环岛阶段、PWM极值和命令提示等调试文字。
-
-普通中弯基础目标上限80，急弯70，前方预警100；出弯保持200ms，再每20ms加2恢复。差速会提高外轮目标，正常非零目标不低于70。此版按用户选择保留跑赛道降速与差速，并非架空固定双轮180的电机测试。
-
-## 验证与独立测试
-
-- `python tests/run_wireless_track_tests.py`：实际活动源码的自动发车、有效帧时序、停车锁定、无线参数、PID目标和4路数据。
-- `python tests/run_simple_display_tests.py`：精简界面的值、布局与状态。
-- 舵机独立测试工程为 `project/mdk/rt1064_servo_output_test.uvprojx`，自动执行A硬件PWM/B直接脉冲三轮，电机始终关闭，详见[测试说明](docs/舵机C30独立输出排查.md)。
-
-电脑模拟和编译不代表实车已跑通。详细操作见[无线说明](docs/VOFA_无线循迹控制.md)。其他目录中保留的旧源码与旧配置不代表当前默认版本。
+构建0错误、2个SDK原有浮点警告，尚未代替实车验证。旧AUTO180 R2固件会自动发车，当前请使用KEY RUN R3；旧无线说明仅供历史参考。
