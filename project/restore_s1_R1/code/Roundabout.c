@@ -126,6 +126,22 @@ static int three_corner_shape(int top,int middle,int bottom,int peak)
 // Scan the road-facing contour, not the whole black component. In mirrored
 // coordinates all candidates are left islands: lower -> inward peak -> upper.
 // Both end corners and a genuine reversal are REQUIRED for first recognition.
+// A real lip can span several camera rows. Keep the total jump threshold,
+// but do not require the whole corner to occur in one pixel row.
+static int contour_corner(int row,int step)
+{
+    int k;
+    if(row+step<2 || row+step>=MT9V03X_H-1) { return 0; }
+    if(!inner_ok[row+step]) { return 1; }
+    if(inner[row]-inner[row+step]>=ROUND_CORNER_JUMP) { return 1; }
+    for(k=1;k<=ROUND_CORNER_SPAN;k++)
+    {
+        int sample=row+step*k;
+        if(sample<2 || sample>=MT9V03X_H-1 || !inner_ok[sample]) { return 0; }
+    }
+    return inner[row]-inner[row+step*ROUND_CORNER_SPAN]>=ROUND_CORNER_JUMP;
+}
+
 static void observe_side(int side)
 {
     int bottom,old_direction=direction;
@@ -135,11 +151,13 @@ static void observe_side(int side)
         int top,y,peak=-1,peak_first=-1,peak_last=-1,score;
         int lower_corner,upper_corner,shape;
         if(!inner_ok[bottom]) { continue; }
-        lower_corner=!inner_ok[bottom+1] || inner[bottom]-inner[bottom+1]>=ROUND_CORNER_JUMP;
-        if(!lower_corner && !(active() && bottom==MT9V03X_H-3)) { continue; }
+        lower_corner=contour_corner(bottom,1);
+        if(!lower_corner && !(Island_State>=ROUND_ENTER && Island_State<=ROUND_EXIT &&
+                              bottom==MT9V03X_H-3)) { continue; }
         top=bottom;
-        while(top>5 && inner_ok[top-1] && abs_i(inner[top]-inner[top-1])<ROUND_CORNER_JUMP) { top--; }
-        upper_corner=top>5 && (!inner_ok[top-1] || inner[top]-inner[top-1]>=ROUND_CORNER_JUMP);
+        while(top>5 && inner_ok[top-1] && abs_i(inner[top]-inner[top-1])<ROUND_CORNER_JUMP &&
+              !contour_corner(top,-1)) { top--; }
+        upper_corner=top>5 && contour_corner(top,-1);
         if(top==bottom || (!active() && (!upper_corner || bottom-top<ROUND_CORNER_MIN_HEIGHT))) { continue; }
         memset(&observed,0,sizeof(observed));
         observed.side=side;observed.x0=MT9V03X_W;observed.x1=0;
@@ -436,11 +454,12 @@ void Roundabout_Process(uint8 moving)
         if(!Left_Lost_Flag[y] && !Right_Lost_Flag[y] && Right_Line[y]-Left_Line[y]>=15)
         { near_l=Left_Line[y];near_r=Right_Line[y];near_center=(near_l+near_r)/2;break; }
     }
-    if(!active() && (Cross_Flag || Cross_GetState()!=CROSS_STATE_NORMAL))
-    { confirm=0;candidate_side=0;return; }
     if(cooldown)
     { if(moving) { cooldown--; } return; }
+    // Called before Cross_Check: use raw measured edges, never cross-filled ones.
     found=observe_island();
+    if(!active() && !found && (Cross_Flag || Cross_GetState()!=CROSS_STATE_NORMAL))
+    { confirm=0;candidate_side=0;previous.valid=0;return; }
     if(!active())
     {
         if(found)
@@ -450,6 +469,9 @@ void Roundabout_Process(uint8 moving)
             if(confirm<ROUND_CONFIRM_FRAMES) { confirm++; }
             if(confirm>=ROUND_CONFIRM_FRAMES)
             {
+                // Only three confirmed, one-sided island observations may take
+                // ownership from a residual cross candidate or false cross.
+                Cross_Init();
                 direction=best.side;
                 entry_guided=exit_guided=0;guide_goal=nx(near_center);
                 Left_Island_Flag=(direction>0);Right_Island_Flag=(direction<0);
@@ -480,7 +502,8 @@ void Roundabout_Process(uint8 moving)
             break;
         case ROUND_WAIT_ENTRY:
             usable=found && approach_guide();
-            progress=found && best.y1>=MT9V03X_H-7 && best.y0>=MT9V03X_H/3;
+            progress=found && best.lower.valid &&
+                     best.y1>=MT9V03X_H-ROUND_ENTRY_MARGIN && best.y0>=MT9V03X_H/3;
             if(moving && progress && ++phase_confirm>=ROUND_PHASE_CONFIRM) { set_stage(ROUND_ENTER); }
             else if(!progress) { phase_confirm=0; }
             break;

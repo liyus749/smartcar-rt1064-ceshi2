@@ -12,6 +12,8 @@
 #define ROUND_EXIT_ARM_FRAMES       6
 // Three-corner recognition, in pixels/rows of the 188x100 image.
 #define ROUND_CORNER_JUMP           10 // inward step or a real lost-edge lip
+#define ROUND_CORNER_SPAN            5 // allow the same real lip to span several rows
+#define ROUND_ENTRY_MARGIN          15 // leave room for three frames before the lower lip is cropped
 #define ROUND_CORNER_MIN_HEIGHT     12 // separation of lower and upper corners
 #define ROUND_CORNER_MIN_GAP         4 // peak must lie between both corners
 #define ROUND_CORNER_PROMINENCE      4 // peak projects inward beyond BOTH ends
@@ -32,7 +34,7 @@ typedef enum {
 enum { ROUND_POINT_LOWER, ROUND_POINT_MIDDLE, ROUND_POINT_UPPER, ROUND_POINT_EXIT, ROUND_POINT_COUNT };
 
 void Roundabout_Init(void);
-// Call once per NEW frame after Cross_Check, before statistics/Err. No gyro required.
+// Call once per NEW frame BEFORE Cross_Check, before statistics/Err. No gyro required.
 void Roundabout_Process(uint8 moving);
 void Roundabout_Tick20ms(uint8 moving);
 void Roundabout_Retry(void); // C13 rearm: main loop resets on next fresh frame

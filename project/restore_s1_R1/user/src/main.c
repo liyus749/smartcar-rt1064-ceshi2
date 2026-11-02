@@ -1082,11 +1082,11 @@ static void Frame_Process(const uint8 *gray)
     line_mode = LINE_SCHEME;
     LineDetect_Process(gray, line_mode);
 
-    /* 2. 十字先检查原始边线；已确认环岛时Cross_Check会主动让出处理权。 */
-    Cross_Check();
+    /* 2. 环岛先读原始边线：连续确认后接管，避免十字候选挡住环岛。 */
 #if USE_ISLAND
     Roundabout_Process((uint8)(run_enable>0.0f && run_switch>0.5f));
 #endif
+    Cross_Check();
 
     /* 补线后统一统计；十字仍按补出的中线转向，出口有弯时能及时跟线。 */
     LineDetect_RefreshStats();

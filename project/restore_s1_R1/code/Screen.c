@@ -62,6 +62,7 @@ void Screen_Init(void)
 
     // 开机先写一行字，方便判断"屏幕到底有没有起来"
     ips200_show_string(0, SCR_TXT_Y, "KEY RUN R3");
+    ips200_show_string(96, SCR_TXT_Y, "RG1"); // Identify this ring-recognition build on the car.
 }
 
 // BEGIN SIMPLE RUN DISPLAY
@@ -75,6 +76,7 @@ void Screen_ShowDriving(float err, int speed, const char *p, const char *d,
                         uint8 running, uint8 waiting)
 {
     ips200_show_string(0, SCR_TXT_Y, "KEY RUN R3");
+    ips200_show_string(96, SCR_TXT_Y, "RG1"); // Identify this ring-recognition build on the car.
     Screen_ShowRunState(running, waiting);
     ips200_show_string(0, SCR_TXT_Y + 24, "SPD");
     ips200_show_int(40, SCR_TXT_Y + 24, speed, 3);
