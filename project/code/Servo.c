@@ -56,6 +56,17 @@ void Servo_SetDuty(uint16 duty)
 {
 #if SERVO_SETUP_MODE == SERVO_SETUP_CENTER
     duty = SERVO_DUTY_MIDDLE;                           // 安装模式下，直接写 PWM 的调用也只能回中
+#elif SERVO_SETUP_MODE == SERVO_SETUP_TRIM
+    if(duty < SERVO_DUTY_MIDDLE - SERVO_CENTER_TRIM_RANGE)
+    {
+        duty = SERVO_DUTY_MIDDLE - SERVO_CENTER_TRIM_RANGE;
+    }
+    if(duty > SERVO_DUTY_MIDDLE + SERVO_CENTER_TRIM_RANGE)
+    {
+        duty = SERVO_DUTY_MIDDLE + SERVO_CENTER_TRIM_RANGE;
+    }
+    if(duty < SERVO_DUTY_RIGHT) { duty = SERVO_DUTY_RIGHT; }
+    if(duty > SERVO_DUTY_LEFT) { duty = SERVO_DUTY_LEFT; }
 #elif SERVO_SETUP_MODE == SERVO_SETUP_MANUAL
     if((duty < SERVO_TEST_DUTY_MIN) || (duty > SERVO_TEST_DUTY_MAX))
     {
@@ -92,20 +103,18 @@ void Servo_Steer(int angle)
 
     duty = (uint16)((int16)SERVO_DUTY_MIDDLE + angle);
 
-    /* ----------------------------------------------------------------------------------------------------------------
-       ★ 只有目标真的变了，才去写 PWM 寄存器。
-
-       为什么要这样（这两条都是"舵机静止时细碎地抖/嗡嗡响"的常见原因）：
-
-       1) Err 每一帧都有 ±1 个像素左右的小噪声，P=3 时算出来的打角就会在相邻两个数之间跳
-          （比如 4→5→4→5）。以前每 20ms 都无条件写一次，舵机就一直被这点小变化推着微动。
-          现在打角没变就直接返回，脉宽稳稳地保持住，舵机自然安静。
-
-       2) 我们的控制周期是 20ms，舵机 PWM 的周期也正好是 20ms。
-          每 20ms 都去写一次"同一个值"，容易和 PWM 自己的周期拍子打架 ——
-          偶尔会把新数值在错误的时间点装进去，那一拍的脉宽就毛刺了，舵机会抖一下。
-          只在数值变化时才写，就完全避开了这件事。
-       ---------------------------------------------------------------------------------------------------------------- */
+    // 正常循迹时抑制相邻输出抖动；保持原有限位和精确回中行为。
+#if SERVO_SETUP_MODE == SERVO_SETUP_RUN
+    {
+        int delta = (int)duty - (int)servo_duty;
+        if((angle != 0) && (angle != SERVO_ANGLE_LEFT_MAX) &&
+           (angle != SERVO_ANGLE_RIGHT_MAX) &&
+           (delta > -SERVO_RUN_HYSTERESIS) && (delta < SERVO_RUN_HYSTERESIS))
+        {
+            return;                                     // 仅过滤细小 PWM 跳动，大转向仍可立即执行
+        }
+    }
+#endif
     if(duty == servo_duty)
     {
         return;                                             // 和上次写下去的一样：什么都不做

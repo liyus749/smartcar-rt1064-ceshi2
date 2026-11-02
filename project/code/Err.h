@@ -18,6 +18,17 @@
 #define ERR_RETURN_FILTER    (0.55f)   // 大偏差正在消退/换向时，加快释放旧转向量
 #define ERR_RETURN_MIN       (5.0f)    // 小偏差仍用正常滤波，避免放大直道噪声
 #define ERR_RETURN_GAP       (3.0f)    // 原始偏差比滤波值至少减小多少才加快回正
+// 高速直入弯：可靠中远处同向弯道输出减速预警；不向转向偏差叠加。
+#define ERR_PREVIEW_SPEED_LOW  (80.0f)
+#define ERR_PREVIEW_SPEED_HIGH (130.0f)
+#define ERR_PREVIEW_NEAR_MAX   (8.0f)
+#define ERR_PREVIEW_GAP        (3.0f)
+#define ERR_PREVIEW_GAIN       (0.25f)
+#define ERR_PREVIEW_MAX        (4.0f)
+#define ERR_PREVIEW_CONFIRM    (2)
+#define ERR_PREVIEW_MIN_PAIRS  (8)
+#define ERR_STRAIGHT_CENTER   (1.5f)    // 中近三段及总偏差都居中时才允许清旧转向
+#define ERR_STRAIGHT_CONFIRM  (2)       // 连续两帧真实双边直道确认
 #define ERR_BIAS             (0.0f)    // 直道零点偏置：如果直道正中显示 Err=-10，就把这里设成 -10
 #define ERR_D_LIMIT          (20.0f)   // D 项偏差变化量限幅（像素/帧）
 
@@ -26,9 +37,9 @@
 #define ERR_SPIKE_LIMIT      (15)      // 孤立假点判定阈值（像素）
 #define ERR_MIN_SPAN         (9)       // 可见行数少于这个，这一帧不算
 
-// 每段权重：远 -> 近。默认 {0.5, 1.0, 2.0, 2.5, 2.5}
-//   越靠近车头的行越可信，所以权重更大；远处仍保留 1.0，保证入弯能提前看到趋势。
-//   想让车更"看远"：把前面几段调大；想让车更稳、更贴脚下：把后面几段调大。
+// 每段权重：远 -> 近。默认 {0.1, 0.3, 1.0, 3.0, 4.0}
+//   主要依靠中近处赛道转向；远处保留少量预瞄，减轻车未入弯就切向内侧。
+//   想让车更"看远"：把前面几段调大；想让转向更靠近弯道：把后面几段调大。
 extern const float Err_ZoneWeight[ERR_SEGMENTS];
 
 #define ERR_USE_ROW_KERNEL   (1)       // 1 = 段内中间行权重更高（三角核，减弱分段边界跳变）
@@ -41,6 +52,7 @@ extern const float Err_ZoneWeight[ERR_SEGMENTS];
 extern volatile float Err;            // 原始图像偏差
 extern volatile float ErrUse;         // 滤波后的偏差（PD 用这个）
 extern volatile float ErrDFrame;      // 每帧偏差变化量（D 项用这个）
+extern volatile float ErrPreview;    // 有符号的入弯减速预警，范围正负 4；不叠加进 ErrUse
 extern volatile int   ErrValidRows;   // 这一帧参与算偏差的有效行数（波形观察用）
 
 //-------------------------------------------------------------------------------------------------------------------
@@ -54,8 +66,11 @@ void Err_Init(void);
 //-------------------------------------------------------------------------------------------------------------------
 uint8 Err_Compute(void);
 
+// 使用设定巡航速度调整预瞄，避免弯道降速目标与预瞄互相切换。<=80 保持原算法。
+void Err_SetPreviewSpeed(float speed);
+
 //-------------------------------------------------------------------------------------------------------------------
-// 函数简介     强制把偏差清 0（十字路口直行用）
+// 函数简介     清除偏差、滤波和预瞄历史
 // 备注信息     会同时清掉滤波值和 D 项历史，避免从"打角"突然回正时甩一下
 //-------------------------------------------------------------------------------------------------------------------
 void Err_ForceStraight(void);

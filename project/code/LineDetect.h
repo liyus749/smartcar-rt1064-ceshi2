@@ -33,6 +33,8 @@
 #define OTSU_BANDS              (4)         // 100 行分成 4 段，每段自己算大津法
 #define OTSU_SMOOTH_K           (0.35f)     // 阈值时间平滑强度
 #define OTSU_BIAS_DEFAULT       (15)        // 阈值偏移量默认值（助手通道 6 可在线改）
+#define OTSU_MIN_CLASS_GAP      (32.0f)   // 黑白两类均值必须足够分离，拒绝把白色纹理自身二分
+#define OTSU_MIN_CLASS_PERCENT  (2)         // 极少量噪点不能单独成为一个灰度类别
 #define OTSU_MIN_CONTRAST       (10)        // 灰度跨度不足时沿用历史阈值，保留十字全白区
 
 //==================================== 边线跟踪参数 ====================================

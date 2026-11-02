@@ -1,48 +1,51 @@
 /*********************************************************************************************************************
-* 文件名称          Cross
-* 功能简介          十字路口识别（基于大津法二值化后的左右边界丢线特征）
-*
-* 思路（详见 Cross.c）：
-*   十字 = 近处赛道正常 -> 中间一段"左右边线都找不到" -> 远处赛道重新出现。
-*   识别后置 Cross_Flag=1 并补线，主程序按补出的中线转向并适当降速。
+* 摄像头十字：白区预判 -> 逐列上下边界 -> L角点 -> 分阶段补线 -> 图像恢复退出。
+* 思路参考暮雪归烟《智能车图像处理（3）-元素识别（十字）》；实现按本工程188x100图像重写。
+* https://blog.csdn.net/fgfgfdg8/article/details/126440305
 ********************************************************************************************************************/
-
 #ifndef __CROSS_H
 #define __CROSS_H
 
 #include "zf_common_headfile.h"
 
-//==================================== 十字识别参数 ====================================
+#define CROSS_LOST_MIN          (10)
+#define CROSS_CONFIRM_FRAMES    (2)
+#define CROSS_HOLD_FRAMES       (15)    // 连续丢失可信出口的帧数上限；有真实出口就刷新，不因停车超时
+#define CROSS_PHASE_CONFIRM     (2)     // 连续缺少入口角点才确认内部阶段，忽略单帧漏检
+#define CROSS_TOP_MARGIN        (3)
+#define CROSS_VALID_ABOVE       (4)
+#define CROSS_VALID_BELOW       (3)
+#define CROSS_SIDE_OFFSET       (6)
+#define CROSS_EXIT_ROWS         (8)
+#define CROSS_EXIT_FRAMES       (2)
+#define CROSS_PROFILE_SUPPORT   (4)     // 横边连续支持，排除孤立黑点
+#define CROSS_CORNER_JUMP       (6)
+#define CROSS_FIT_ROWS          (8)
+#define CROSS_FIT_SEARCH        (8)
+#define CROSS_MAX_DX_DY         (1.2f)  // x=a*y+b，近竖直线a接近0，不能照搬y=k*x+b的限幅
+#define CROSS_PATH_WHITE_PCT    (85)
 
-#define CROSS_LOST_MIN          (10)    // 连续多少行"左右两边都丢线"才怀疑是十字
-#define CROSS_CONFIRM_FRAMES    (2)     // 连续几帧满足条件才确认（防单帧误判）
-#define CROSS_HOLD_FRAMES       (15)    // 缺口进入近处后，最多保持减速的处理帧数
-#define CROSS_TOP_MARGIN        (3)     // 丢线段顶部必须离图像顶部至少这么多行
-#define CROSS_VALID_ABOVE       (4)     // 丢线段上方至少要有这么多行有效赛道
-#define CROSS_VALID_BELOW       (3)     // 丢线段下方必须有连续有效赛道
-#define CROSS_SIDE_OFFSET       (6)     // 十字白区须超出原左右边线各多少像素
-#define CROSS_EXIT_ROWS         (8)     // 近处恢复连续赛道后的退出判据
-#define CROSS_EXIT_FRAMES       (2)     // 连续几帧恢复后退出减速状态
+typedef enum
+{
+    CROSS_STATE_NORMAL = 0,
+    CROSS_STATE_CANDIDATE = 1,
+    CROSS_STATE_ENTER = 2,
+    CROSS_STATE_INSIDE = 3,
+    CROSS_STATE_EXIT = 4
+} Cross_State;
 
-//======================================================================================
+enum
+{
+    CROSS_UPPER_LEFT = 0, CROSS_UPPER_RIGHT,
+    CROSS_LOWER_LEFT, CROSS_LOWER_RIGHT, CROSS_CORNER_COUNT
+};
 
-// 十字标志：1 = 正在过十字（定义在 Camera.c，环岛 island.c 也引用它）
 extern volatile int Cross_Flag;
-
-//-------------------------------------------------------------------------------------------------------------------
-// 函数简介     十字模块初始化
-//-------------------------------------------------------------------------------------------------------------------
 void Cross_Init(void);
-
-//-------------------------------------------------------------------------------------------------------------------
-// 函数简介     每帧调一次：判断这一帧是否在十字里，维护 Cross_Flag
-// 备注信息     必须在巡线（LineDetect_Process）和环岛（Island_Detect）之后调用
-//-------------------------------------------------------------------------------------------------------------------
+// 每帧基础巡线后先检查十字；已确认环岛时让出处理权，之后再刷新统计/计算偏差。
 void Cross_Check(void);
-
-//-------------------------------------------------------------------------------------------------------------------
-// 函数简介     读取当前"左右都丢线"的连续行数（调试用）
-//-------------------------------------------------------------------------------------------------------------------
-int Cross_GetRunLen(void);
-
+int Cross_GetRunLen(void);              // 补线前最大连续双丢行数，保留原调试接口
+Cross_State Cross_GetState(void);
+uint8 Cross_GetCorner(int which, int *x, int *y); // 仅当前帧真实找到的角点
+uint8 Cross_GetFillMask(int row);        // bit0左补线，bit1右补线；实测边线为0
 #endif

@@ -61,6 +61,8 @@ static int Otsu_Rows(const uint8 *image, uint8 row_begin, uint8 row_end)
     float  micro_fore;
     float  sigma;
     float  sigma_max = -1.0f;
+    float  best_class_gap = 0.0f;
+    uint32 best_back = 0, best_fore = 0;
     uint8  th        = 0;
     uint8  min_v;
     uint8  max_v;
@@ -108,9 +110,17 @@ static int Otsu_Rows(const uint8 *image, uint8 row_begin, uint8 row_end)
         {
             sigma_max = sigma;
             th        = (uint8)j;
+            best_class_gap = micro_fore - micro_back;
+            best_back = pix_back;
+            best_fore = (uint32)pix_fore;
         }
     }
 
+    // 十字整段白区也会有几十级纹理/传感器噪声。仅检查灰度跨度会把白与白重新分成两类，
+    // 随时间平滑把阈值逐步推到白色内部，造成静止时边线忽有忽无。
+    if(best_class_gap < OTSU_MIN_CLASS_GAP ||
+       best_back*100 < amount*OTSU_MIN_CLASS_PERCENT ||
+       best_fore*100 < amount*OTSU_MIN_CLASS_PERCENT) { return -1; }
     return th;
 }
 

@@ -147,7 +147,7 @@ void Assistant_SendFrame(const uint8 *gray, const uint8 *left, const uint8 *righ
                 char line[160];
 
                 snprintf(line, sizeof(line),
-                         "wave:%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f\n",
+                         "%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f\n",
                          g_osc_buf[0], g_osc_buf[1], g_osc_buf[2], g_osc_buf[3],
                          g_osc_buf[4], g_osc_buf[5], g_osc_buf[6], g_osc_buf[7]);
 

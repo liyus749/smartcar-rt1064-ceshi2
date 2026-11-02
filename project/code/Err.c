@@ -4,6 +4,7 @@
 ********************************************************************************************************************/
 
 #include "Err.h"
+#include "Roundabout.h"
 #include "Cross.h"
 
 extern volatile int   Left_Line[MT9V03X_H];
@@ -12,6 +13,7 @@ extern volatile int   Road_Wide[MT9V03X_H];
 extern int            Left_Lost_Flag[MT9V03X_H];
 extern int            Right_Lost_Flag[MT9V03X_H];
 extern volatile int   Search_Stop_Line;
+extern volatile int   Island_State;
 
 //===================================================================================================================
 // 对外输出
@@ -19,6 +21,7 @@ extern volatile int   Search_Stop_Line;
 volatile float Err       = 0.0f;      // 原始图像偏差
 volatile float ErrUse    = 0.0f;      // 滤波后偏差（PD 用）
 volatile float ErrDFrame = 0.0f;      // 每帧变化量（D 项用）
+volatile float ErrPreview = 0.0f;
 volatile int   ErrValidRows = 0;      // 有效行数
 
 //===================================================================================================================
@@ -32,11 +35,15 @@ static int   width_history[MT9V03X_H];// 同一行最近的双边实测路宽；
 static int   ln_farthest = 0;         // 看得见的最远行
 static int   ln_span     = 0;         // 可见行数
 
-// 5 段权重：远 -> 近（远处权重调小，减少远端背景/噪声影响）
-const float Err_ZoneWeight[ERR_SEGMENTS] = { 0.5f, 1.0f, 2.0f, 2.5f, 2.5f };
+// 5 段权重：远 -> 近。近处居中时减弱远弯影响，弯道靠近后再增加转向。
+const float Err_ZoneWeight[ERR_SEGMENTS] = { 0.1f, 0.3f, 1.0f, 3.0f, 4.0f };
 
 static float err_filt_val  = 0.0f;    // 滤波值
 static uint8 err_filt_init = 0;       // 第一次直接赋值
+static float preview_speed_factor = 0.0f;
+static int preview_direction = 0;
+static uint8 preview_confirm = 0;
+static uint8 straight_confirm = 0;
 static float err_use_prev  = 0.0f;    // 上一帧滤波值（算 D 项）
 
 //-------------------------------------------------------------------------------------------------------------------
@@ -50,6 +57,11 @@ void Err_Init(void)
     ErrUse    = 0.0f;
     ErrDFrame = 0.0f;
     ErrValidRows = 0;
+    ErrPreview = 0.0f;
+    preview_speed_factor = 0.0f;
+    preview_direction = 0;
+    preview_confirm = 0;
+    straight_confirm = 0;
 
     err_filt_val  = 0.0f;
     err_filt_init = 0;
@@ -68,6 +80,15 @@ void Err_Init(void)
 // 函数简介     双边直接取中点；弯道只剩单边时，用该行历史实测路宽估算中线。
 // 返回参数     uint8    1 = 数据够用；0 = 看得太少
 //-------------------------------------------------------------------------------------------------------------------
+void Err_SetPreviewSpeed(float speed)
+{
+    float factor = (speed - ERR_PREVIEW_SPEED_LOW) /
+                   (ERR_PREVIEW_SPEED_HIGH - ERR_PREVIEW_SPEED_LOW);
+    if(!(factor > 0.0f)) { factor = 0.0f; } // 包含 NaN
+    if(factor > 1.0f) { factor = 1.0f; }
+    preview_speed_factor = factor;
+}
+
 static uint8 image_line_prepare(void)
 {
     int farthest;
@@ -96,11 +117,11 @@ static uint8 image_line_prepare(void)
             zone_width[row] = width;
             zone_ok[row] = 1;
             // 十字补出的线不能当成实测路宽学习。
-            if(!Cross_Flag) { width_history[row] = width; }
+            if(!Cross_Flag && !Island_State) { width_history[row] = width; }
         }
-        else if((left_ok != right_ok) && (width_history[row] > 0))
+        else if((left_ok != right_ok) && (width_history[row] > 0 || Island_State))
         {
-            zone_width[row] = width_history[row];
+            zone_width[row] = width_history[row]>0 ? width_history[row]:Roundabout_GetRoadWidth(row);
             zone_mid[row] = left_ok ? Left_Line[row] + zone_width[row] / 2
                                     : Right_Line[row] - zone_width[row] / 2;
             if(zone_mid[row] < 0) { zone_mid[row] = 0; }
@@ -141,6 +162,7 @@ static uint8 err_zone(float *err_out)
     int   z;
     int   v;
     int   cnt[ERR_SEGMENTS];
+    int   pairs[ERR_SEGMENTS];
     float sum[ERR_SEGMENTS];
     float wsum[ERR_SEGMENTS];
     float total_e = 0.0f;
@@ -150,6 +172,7 @@ static uint8 err_zone(float *err_out)
     for(z = 0; z < ERR_SEGMENTS; z++)
     {
         cnt[z]  = 0;
+        pairs[z] = 0;
         sum[z]  = 0.0f;
         wsum[z] = 0.0f;
     }
@@ -223,6 +246,7 @@ static uint8 err_zone(float *err_out)
         sum[z]  += rw * e;
         wsum[z] += rw;
         cnt[z]++;
+        if(!Left_Lost_Flag[row] && !Right_Lost_Flag[row]) { pairs[z]++; }
         ErrValidRows++;
     }
 
@@ -240,6 +264,66 @@ static uint8 err_zone(float *err_out)
     if(total_w < 0.001f) { return 0; }
 
     lateral = total_e / total_w;
+    /* 入弯预瞄只看有真实双边支撑的中远段；远处一个拐点、十字补线不触发。
+       输出仅用于提前降速，不叠加进舵机偏差，避免小 S 弯额外打角。 */
+    if(!Cross_Flag && !Island_State && (preview_speed_factor > 0.0f) &&
+       (ln_span >= MT9V03X_H * 4 / 5) &&
+       (pairs[1] >= ERR_PREVIEW_MIN_PAIRS) &&
+       (pairs[2] >= ERR_PREVIEW_MIN_PAIRS) &&
+       (pairs[3] >= ERR_PREVIEW_MIN_PAIRS) &&
+       (pairs[4] >= ERR_PREVIEW_MIN_PAIRS))
+    {
+        float far_e = sum[1] / wsum[1];
+        float mid_e = sum[2] / wsum[2];
+        float near_e = (Err_ZoneWeight[3] * sum[3] / wsum[3] +
+                        Err_ZoneWeight[4] * sum[4] / wsum[4]) /
+                       (Err_ZoneWeight[3] + Err_ZoneWeight[4]);
+        float near_abs = (near_e >= 0.0f) ? near_e : -near_e;
+        float mid_abs = (mid_e >= 0.0f) ? mid_e : -mid_e;
+        float ahead = mid_abs - near_abs - ERR_PREVIEW_GAP;
+        if((far_e * mid_e > 0.0f) && (lateral * mid_e > 0.0f) &&
+           (near_abs < ERR_PREVIEW_NEAR_MAX) && (ahead > 0.0f) &&
+           ((near_abs < 1.5f) || (near_e * mid_e >= 0.0f)))
+        {
+            int direction = (mid_e >= 0.0f) ? 1 : -1;
+            if(direction != preview_direction) { preview_confirm = 0; }
+            preview_direction = direction;
+            if(preview_confirm < ERR_PREVIEW_CONFIRM) { preview_confirm++; }
+            if(preview_confirm >= ERR_PREVIEW_CONFIRM)
+            {
+                float addition = ahead * ERR_PREVIEW_GAIN;
+                if(addition > ERR_PREVIEW_MAX) { addition = ERR_PREVIEW_MAX; }
+                addition *= preview_speed_factor * (1.0f - near_abs / ERR_PREVIEW_NEAR_MAX);
+                ErrPreview = (float)direction * addition;
+            }
+        }
+        else { preview_direction = 0; preview_confirm = 0; }
+    }
+    else { preview_direction = 0; preview_confirm = 0; }
+    /* 只在真实双边充分、连续中近三段都居中时确认出弯直道。
+       原始总偏差也须居中，远处已有下一弯时不强制回正。 */
+    {
+        int straight = !Cross_Flag && !Island_State && (ln_span >= MT9V03X_H * 4 / 5) &&
+                       (lateral - ERR_BIAS <= ERR_STRAIGHT_CENTER) &&
+                       (lateral - ERR_BIAS >= -ERR_STRAIGHT_CENTER);
+        for(z = 2; z < ERR_SEGMENTS; z++)
+        {
+            if((pairs[z] < ERR_PREVIEW_MIN_PAIRS) || (wsum[z] < 0.001f))
+            {
+                straight = 0;
+            }
+            else
+            {
+                float e = sum[z] / wsum[z] - ERR_BIAS;
+                if((e < -ERR_STRAIGHT_CENTER) || (e > ERR_STRAIGHT_CENTER)) { straight = 0; }
+            }
+        }
+        if(straight)
+        {
+            if(straight_confirm < ERR_STRAIGHT_CONFIRM) { straight_confirm++; }
+        }
+        else { straight_confirm = 0; }
+    }
     *err_out = lateral - ERR_BIAS;
     return 1;
 }
@@ -253,9 +337,13 @@ uint8 Err_Compute(void)
     uint8 got;
 
     ErrValidRows = 0;
+    ErrPreview = 0.0f;
     if(!image_line_prepare())
     {
         ErrDFrame = 0.0f;
+        preview_direction = 0;
+        preview_confirm = 0;
+        straight_confirm = 0;
         return 0;
     }
 
@@ -263,6 +351,9 @@ uint8 Err_Compute(void)
     if(!got)
     {
         ErrDFrame = 0.0f;
+        preview_direction = 0;
+        preview_confirm = 0;
+        straight_confirm = 0;
         return 0;
     }
 
@@ -281,6 +372,8 @@ uint8 Err_Compute(void)
         {
             alpha = ERR_RETURN_FILTER;
         }
+        // 确认已居中的直道后，跳过旧弯道低通尾巴；20ms 控制死区同时清 D 并精确回中。
+        if(straight_confirm >= ERR_STRAIGHT_CONFIRM) { alpha = 1.0f; }
         if(0 == err_filt_init)
         {
             err_filt_val  = Err;
@@ -313,6 +406,10 @@ void Err_ForceStraight(void)
     Err          = 0.0f;
     ErrUse       = 0.0f;
     ErrDFrame    = 0.0f;
+    ErrPreview   = 0.0f;
+    preview_direction = 0;
+    preview_confirm = 0;
+    straight_confirm = 0;
     err_filt_val = 0.0f;
     err_filt_init = 1;
     err_use_prev = 0.0f;

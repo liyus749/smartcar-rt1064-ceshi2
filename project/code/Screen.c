@@ -13,9 +13,37 @@
 ********************************************************************************************************************/
 
 #include "Screen.h"
+#include "Cross.h"
+#include "Roundabout.h"
 
 static uint8 status_first_frame = 1;
 static uint16 scr_div = 0;                                  // 刷屏分频计数
+
+// 补线只在本次图像实际刷新时叠加，避免分频刷屏期间留下旧角点。
+static void Screen_CrossOverlay(const uint8 *line_l, const uint8 *line_r)
+{
+    int row, which, x, y, d;
+    for(row = 2; row < SCR_IMG_H; row += 2)
+    {
+        uint8 mask = Cross_GetFillMask(row);
+        if((mask & 1) && line_l && line_l[row] < SCR_IMG_W)
+        { ips200_draw_point(SCR_IMG_X+line_l[row], SCR_IMG_Y+row, RGB565_YELLOW); }
+        if((mask & 2) && line_r && line_r[row] < SCR_IMG_W)
+        { ips200_draw_point(SCR_IMG_X+line_r[row], SCR_IMG_Y+row, RGB565_YELLOW); }
+    }
+    for(which = 0; which < CROSS_CORNER_COUNT; which++)
+    {
+        uint16 color = (which < CROSS_LOWER_LEFT) ? 0xF81F : 0x07FF; // 上品红，下青色
+        if(!Cross_GetCorner(which, &x, &y)) { continue; }
+        for(d = -2; d <= 2; d++)
+        {
+            if(x+d >= 0 && x+d < SCR_IMG_W && y >= 0 && y < SCR_IMG_H)
+            { ips200_draw_point(SCR_IMG_X+x+d, SCR_IMG_Y+y, color); }
+            if(y+d >= 0 && y+d < SCR_IMG_H && x >= 0 && x < SCR_IMG_W)
+            { ips200_draw_point(SCR_IMG_X+x, SCR_IMG_Y+y+d, color); }
+        }
+    }
+}
 
 //-------------------------------------------------------------------------------------------------------------------
 // 函数简介     屏幕初始化
@@ -39,7 +67,7 @@ void Screen_Init(void)
 //-------------------------------------------------------------------------------------------------------------------
 // 函数简介     显示一帧：图像 + 三条边线 + 中心参考虚线
 //-------------------------------------------------------------------------------------------------------------------
-void Screen_ShowFrame(const uint8 *gray, const uint8 *bin,
+uint8 Screen_ShowFrame(const uint8 *gray, const uint8 *bin,
                       const uint8 *line_l, const uint8 *line_m, const uint8 *line_r)
 {
     uint16 i;
@@ -49,7 +77,7 @@ void Screen_ShowFrame(const uint8 *gray, const uint8 *bin,
     scr_div ++;
     if(scr_div < SCREEN_EVERY_N)
     {
-        return;
+        return 0;
     }
     scr_div = 0;
 
@@ -95,6 +123,29 @@ void Screen_ShowFrame(const uint8 *gray, const uint8 *bin,
             if(x < SCR_IMG_W) { ips200_draw_point(SCR_IMG_X + x, SCR_IMG_Y + i, SCR_COLOR_LINE_R); }
         }
     }
+    Screen_CrossOverlay(line_l, line_r);
+    // 环岛补线：青色；真实边线保持原配色。角点只标当前帧观测。
+    for(i=2;i<SCR_IMG_H;i+=2)
+    {
+        uint8 mask=Roundabout_GetFillMask(i);
+        if((mask&1) && line_l && line_l[i]<SCR_IMG_W)
+        { ips200_draw_point(SCR_IMG_X+line_l[i],SCR_IMG_Y+i,0x07FF); }
+        if((mask&2) && line_r && line_r[i]<SCR_IMG_W)
+        { ips200_draw_point(SCR_IMG_X+line_r[i],SCR_IMG_Y+i,0x07FF); }
+    }
+    for(i=0;i<ROUND_POINT_COUNT;i++)
+    {
+        int cx,cy,d;
+        if(!Roundabout_GetPoint(i,&cx,&cy)) { continue; }
+        for(d=-2;d<=2;d++)
+        {
+            if(cx+d>=0 && cx+d<SCR_IMG_W && cy>=0 && cy<SCR_IMG_H)
+            { ips200_draw_point(SCR_IMG_X+cx+d,SCR_IMG_Y+cy,0xF81F); }
+            if(cy+d>=0 && cy+d<SCR_IMG_H && cx>=0 && cx<SCR_IMG_W)
+            { ips200_draw_point(SCR_IMG_X+cx,SCR_IMG_Y+cy+d,0xF81F); }
+        }
+    }
+    return 1;
 }
 
 //-------------------------------------------------------------------------------------------------------------------
@@ -122,6 +173,11 @@ void Screen_ShowLineMode(int mode)
 {
     ips200_show_string(80, SCR_TXT_Y + 16, "Md ");
     ips200_show_string(112, SCR_TXT_Y + 16, (1 == mode) ? "O" : "C");
+#if SCREEN_SHOW_BINARY
+    ips200_show_string(120, SCR_TXT_Y + 16, "BIN");
+#else
+    ips200_show_string(120, SCR_TXT_Y + 16, "GRY");
+#endif
 }
 
 //-------------------------------------------------------------------------------------------------------------------
@@ -131,6 +187,8 @@ void Screen_ShowCross(int cross)
 {
     ips200_show_string(152, SCR_TXT_Y + 16, "Cr");
     ips200_show_int   (176, SCR_TXT_Y + 16, (int32)cross, 1);
+    ips200_show_string(192, SCR_TXT_Y + 16, "Cs");
+    ips200_show_int(216, SCR_TXT_Y + 16, (int32)Cross_GetState(), 1);
 }
 
 //-------------------------------------------------------------------------------------------------------------------

@@ -1,5 +1,6 @@
 """Exercise the real Servo.c auto-sweep state machine without physical PWM."""
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 
@@ -54,10 +55,10 @@ int main(void) {
     assert(SERVO_SETUP_MODE == SERVO_SETUP_AUTO);
     assert(!SERVO_TEST_USE_WIRELESS);
     Servo_Init();
-    assert(writes && output == 760);
+    assert(writes && output == SERVO_DUTY_MIDDLE);
     assert(Servo_AutoTestAmplitude() == 40);
     for(int i=0; i<SERVO_AUTO_START_TICKS; i++) {
-        Servo_AutoTestStep(); assert(output == 760);
+        Servo_AutoTestStep(); assert(output == SERVO_DUTY_MIDDLE);
     }
     complete_sweep(40);
     assert(Servo_AutoTestAmplitude() == 40); /* Never grows unattended. */
@@ -69,25 +70,25 @@ int main(void) {
 
     Servo_AutoTestPause(0);
     for(int i=0; i<200; i++) Servo_AutoTestStep();
-    assert(output > 760);
+    assert(output > SERVO_DUTY_MIDDLE);
     Servo_AutoTestPause(1);
-    assert(output == 760 && Servo_AutoTestPaused());
+    assert(output == SERVO_DUTY_MIDDLE && Servo_AutoTestPaused());
     for(int i=0; i<1000; i++) Servo_AutoTestStep();
-    assert(output == 760);
+    assert(output == SERVO_DUTY_MIDDLE);
 
     Servo_AutoTestAdjust(10000);
     assert(Servo_AutoTestAmplitude() == 50); /* At most +10 per request. */
-    assert(output == 760 && !Servo_AutoTestPaused());
+    assert(output == SERVO_DUTY_MIDDLE && !Servo_AutoTestPaused());
     for(int i=0; i<40; i++) Servo_AutoTestAdjust(10);
     assert(Servo_AutoTestAmplitude() == SERVO_AUTO_MAX_AMP);
     complete_sweep(SERVO_AUTO_MAX_AMP);
     for(int i=0; i<40; i++) Servo_AutoTestAdjust(-10);
     assert(Servo_AutoTestAmplitude() == SERVO_AUTO_AMP_STEP);
     complete_sweep(SERVO_AUTO_AMP_STEP);
-    Servo_SetDuty(0); assert(output == 760);
-    Servo_SetDuty(10000); assert(output == 760);
+    Servo_SetDuty(0); assert(output == SERVO_DUTY_MIDDLE);
+    Servo_SetDuty(10000); assert(output == SERVO_DUTY_MIDDLE);
     Servo_Init();
-    assert(output == 760 && Servo_AutoTestAmplitude() == 40);
+    assert(output == SERVO_DUTY_MIDDLE && Servo_AutoTestAmplitude() == 40);
     puts("PASS: real Servo.c: startup center, both sweep endpoints, one-unit slew, three-cycle stop, pause/resume, bounded manual amplitude, no wireless commands");
     return 0;
 }
@@ -98,11 +99,13 @@ with tempfile.TemporaryDirectory(prefix="su400_auto_test_") as directory:
     (build / "zf_common_headfile.h").write_text(STUB, encoding="utf-8")
     # Exercise the auto-sweep branch without changing the production RUN config.
     servo_header = (ROOT / "project/code/Servo.h").read_text(encoding="utf-8")
-    run_mode = "#define SERVO_SETUP_MODE        (SERVO_SETUP_RUN)"
-    auto_mode = "#define SERVO_SETUP_MODE        (SERVO_SETUP_AUTO)"
-    if run_mode not in servo_header and auto_mode not in servo_header:
-        raise RuntimeError("Unexpected servo setup mode: cannot select AUTO for this test")
-    (build / "Servo.h").write_text(servo_header.replace(run_mode, auto_mode), encoding="utf-8")
+    servo_header, mode_count = re.subn(
+        r"(#define\s+SERVO_SETUP_MODE\s+)\(SERVO_SETUP_[A-Z]+\)",
+        r"\1(SERVO_SETUP_AUTO)", servo_header,
+    )
+    if mode_count != 1:
+        raise RuntimeError("Expected one servo setup mode definition")
+    (build / "Servo.h").write_text(servo_header, encoding="utf-8")
     (build / "Servo.c").write_bytes((ROOT / "project/code/Servo.c").read_bytes())
     (build / "auto_test.c").write_text(TEST, encoding="utf-8")
     executable = build / "auto_test.exe"

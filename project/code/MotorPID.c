@@ -13,6 +13,16 @@ static volatile float g_cur_target = 0.0f;                   // 软启动爬坡�
 static volatile float g_kp       = MOTORPID_DEFAULT_KP;
 static volatile float g_ki       = MOTORPID_DEFAULT_KI;
 static volatile float g_kd       = MOTORPID_DEFAULT_KD;
+static volatile float g_rkp = MOTORPID_DEFAULT_KP;
+static volatile float g_rki = MOTORPID_DEFAULT_KI;
+static volatile float g_rkd = MOTORPID_DEFAULT_KD;
+static volatile uint8 g_wheel_mode = 0;
+static volatile float g_request_l, g_request_r;
+static float g_ramp_l, g_ramp_r;
+static volatile float g_turn = 0.0f;
+static float g_diff_ratio = 0.0f;
+static volatile float g_target_l = 0.0f;
+static volatile float g_target_r = 0.0f;
 static volatile uint8 g_enable   = 0;
 
 static volatile float g_out      = 0.0f;      // 左右输出平均值（屏幕显示）
@@ -40,6 +50,9 @@ static float limitf(float v, float lo, float hi)
 static void pid_reset(void)
 {
     g_cur_target  = 0.0f;
+    g_ramp_l = g_ramp_r = 0.0f;
+    g_turn = g_diff_ratio = 0.0f;
+    g_target_l = g_target_r = 0.0f;
     g_out         = 0.0f;
     g_measured    = 0.0f;
     g_acc_l       = 0.0f;
@@ -60,6 +73,8 @@ void MotorPID_Init(void)
     g_ki     = MOTORPID_DEFAULT_KI;
     g_kd     = MOTORPID_DEFAULT_KD;
     g_enable = 0;
+    g_wheel_mode = 0;
+    g_rkp = g_kp; g_rki = g_ki; g_rkd = g_kd;
     pid_reset();
 }
 
@@ -68,18 +83,52 @@ void MotorPID_Init(void)
 //-------------------------------------------------------------------------------------------------------------------
 void MotorPID_SetTarget(float target)
 {
-    if(target < 0.0f) { target = 0.0f; }
+    if(!(target > 0.0f)) { target = 0.0f; } // 非正值及 NaN 均归零
+    if(target > 0.0f && target < MOTORPID_MIN_RUN_TARGET) { target = MOTORPID_MIN_RUN_TARGET; }
+    if(target > MOTORPID_WHEEL_TARGET_MAX) { target = MOTORPID_WHEEL_TARGET_MAX; }
     g_target = target;
+    g_wheel_mode = 0;
 }
 
 //-------------------------------------------------------------------------------------------------------------------
-// 函数简介     设置 PID 参数
+// 函数简介     设置差速方向及幅度
 //-------------------------------------------------------------------------------------------------------------------
+void MotorPID_SetTurn(float turn)
+{
+    if(turn != turn) { turn = 0.0f; }
+    g_turn = limitf(turn, -1.0f, 1.0f);
+}
+
 void MotorPID_SetGains(float kp, float ki, float kd)
 {
     g_kp = kp;
     g_ki = ki;
     g_kd = kd;
+    g_rkp = kp; g_rki = ki; g_rkd = kd;
+}
+
+void MotorPID_SetWheelGains(float lp, float li, float ld, float rp, float ri, float rd)
+{
+    g_kp=lp; g_ki=li; g_kd=ld;
+    g_rkp=rp; g_rki=ri; g_rkd=rd;
+}
+
+static float wheel_request(float value)
+{
+    if(!(value > 0.0f)) { return 0.0f; }
+    return limitf(value, MOTORPID_MIN_RUN_TARGET, MOTORPID_WHEEL_TARGET_MAX);
+}
+
+void MotorPID_SetWheelTargets(float left, float right)
+{
+    g_request_l=wheel_request(left); g_request_r=wheel_request(right);
+    g_wheel_mode=1;
+}
+
+static float wheel_ramp(float previous, float requested)
+{
+    if(previous >= requested) { return requested; }
+    return limitf(previous + requested*(20.0f/MOTORPID_RAMP_MS), 0.0f, requested);
 }
 
 //-------------------------------------------------------------------------------------------------------------------
@@ -107,16 +156,22 @@ void MotorPID_SetEnable(uint8 enable)
 //-------------------------------------------------------------------------------------------------------------------
 // 函数简介     每个控制周期调一次（20ms 中断里）
 //-------------------------------------------------------------------------------------------------------------------
-static float pid_update_one(float target, float measured,
+static float pid_update_one(float target, float measured, float kp, float ki, float kd,
                             volatile float *last_error,
                             volatile float *prev_error,
                             volatile float *accumulator)
 {
     float error = target - measured;
     float d_error = error - *last_error;
-    float inc = g_kp * d_error
-              + g_ki * error
-              + g_kd * (error - 2.0f * *last_error + *prev_error);
+    float inc = kp * d_error
+              + ki * error
+              + kd * (error - 2.0f * *last_error + *prev_error);
+
+    if(target <= 0.0f)
+    {
+        *last_error = *prev_error = *accumulator = 0.0f;
+        return 0.0f;
+    }
 
     *accumulator += inc;
     *accumulator = limitf(*accumulator, 0.0f, (float)MOTORPID_MAX_DUTY);
@@ -161,10 +216,46 @@ int MotorPID_Update(int enc_l, int enc_r)
         g_cur_target = g_target;
     }
 
-    /* 左右轮各自追踪同一个目标速度，独立补偿电机差异和弯道负载。 */
-    out_l = pid_update_one(g_cur_target, measured_l,
+    g_target_l = g_target_r = g_cur_target;
+#if MOTORPID_DIFFERENTIAL_ENABLE
+    {
+        float desired = g_turn * MOTORPID_DIFF_MAX_RATIO;
+        float delta;
+        // 回正立即撤销差速；换向先清旧侧补偿，避免旧外轮继续加速。
+        if((desired == 0.0f) || (desired * g_diff_ratio < 0.0f)) { g_diff_ratio = 0.0f; }
+        delta = desired - g_diff_ratio;
+        delta = limitf(delta, -MOTORPID_DIFF_STEP, MOTORPID_DIFF_STEP);
+        g_diff_ratio += delta;
+        if(g_diff_ratio != 0.0f)
+        {
+            float ratio = (g_diff_ratio > 0.0f) ? g_diff_ratio : -g_diff_ratio;
+            float inner = g_cur_target;
+            float outer = inner * (1.0f + ratio);
+            if(outer > MOTORPID_WHEEL_TARGET_MAX)
+            {
+                // 仅截外轮会让高设定值两轮都变成240；一起分配才能保留差速。
+                outer = MOTORPID_WHEEL_TARGET_MAX;
+                inner = outer / (1.0f + ratio);
+                if(inner < MOTORPID_MIN_RUN_TARGET) { inner = MOTORPID_MIN_RUN_TARGET; }
+            }
+            if(g_diff_ratio > 0.0f) { g_target_l=inner; g_target_r=outer; }
+            else { g_target_l=outer; g_target_r=inner; }
+        }
+    }
+#endif
+    g_target_l = limitf(g_target_l, 0.0f, MOTORPID_WHEEL_TARGET_MAX);
+    g_target_r = limitf(g_target_r, 0.0f, MOTORPID_WHEEL_TARGET_MAX);
+    if(g_wheel_mode)
+    {
+        g_diff_ratio=0.0f;
+        g_ramp_l=wheel_ramp(g_ramp_l,g_request_l);
+        g_ramp_r=wheel_ramp(g_ramp_r,g_request_r);
+        g_target_l=g_ramp_l; g_target_r=g_ramp_r;
+    }
+    /* 左右分别闭环；差速改的是速度目标，不是盲目加固定 PWM。 */
+    out_l = pid_update_one(g_target_l, measured_l, g_kp, g_ki, g_kd,
                            &g_last_error_l, &g_prev_error_l, &g_acc_l);
-    out_r = pid_update_one(g_cur_target, measured_r,
+    out_r = pid_update_one(g_target_r, measured_r, g_rkp, g_rki, g_rkd,
                            &g_last_error_r, &g_prev_error_r, &g_acc_r);
 
     g_out = (out_l + out_r) * 0.5f;
@@ -178,7 +269,18 @@ int MotorPID_Update(int enc_l, int enc_r)
 //-------------------------------------------------------------------------------------------------------------------
 float MotorPID_GetTarget(void)
 {
-    return g_cur_target;
+    return (g_target_l + g_target_r) * 0.5f;
+}
+
+float MotorPID_GetTargetLeft(void) { return g_target_l; }
+float MotorPID_GetTargetRight(void) { return g_target_r; }
+
+float MotorPID_GetDiffPercent(void)
+{
+    float inner = (g_target_l < g_target_r) ? g_target_l : g_target_r;
+    float outer = (g_target_l > g_target_r) ? g_target_l : g_target_r;
+    if(inner <= 0.0f) { return 0.0f; }
+    return (outer-inner)*100.0f/inner;
 }
 
 //-------------------------------------------------------------------------------------------------------------------
@@ -188,6 +290,9 @@ int MotorPID_GetOutput(void)
 {
     return (int)g_out;
 }
+
+int MotorPID_GetOutputLeft(void) { return (int)g_acc_l; }
+int MotorPID_GetOutputRight(void) { return (int)g_acc_r; }
 
 //-------------------------------------------------------------------------------------------------------------------
 // 函数简介     读取实测速度

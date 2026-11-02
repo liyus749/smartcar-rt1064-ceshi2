@@ -40,7 +40,7 @@
 
 // 显示内容：0 = 灰度原图（能看反光、阈值效果，调阈值用这个）
 //           1 = 二值图（黑线白底，看阈值切得干不干净）
-#define SCREEN_SHOW_BINARY      (0)
+#define SCREEN_SHOW_BINARY      (1)
 
 // 每几帧刷一次屏幕：1 = 每帧都刷（最流畅）  2/3 = 隔帧刷（省时间，觉得卡时改成 2）
 #define SCREEN_EVERY_N          (2)         // 每 2 帧刷一次屏，给控制回路省时间
@@ -79,7 +79,8 @@ void Screen_Init(void);
 // 使用示例     Screen_ShowFrame(mt9v03x_image[0], image_two_value[0], line_left, line_mid, line_right);
 // 备注信息     按 SCREEN_EVERY_N 自动分频，不用自己在外面算
 //-------------------------------------------------------------------------------------------------------------------
-void Screen_ShowFrame(const uint8 *gray, const uint8 *bin,
+// 返回1表示本帧已刷新；主程序同步更新文字，返回0时保留上一帧显示。
+uint8 Screen_ShowFrame(const uint8 *gray, const uint8 *bin,
                       const uint8 *line_l, const uint8 *line_m, const uint8 *line_r);
 
 //-------------------------------------------------------------------------------------------------------------------

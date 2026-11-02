@@ -29,7 +29,7 @@ with tempfile.TemporaryDirectory(prefix="ceshi_vision_tests_") as directory:
         "-I", str(build), "-I", str(ROOT / "project/code"),
         str(ROOT / "tests/vision_host.c"),
         *[str(ROOT / "project/code" / name)
-          for name in ("LineDetect.c", "Cross.c", "Err.c")],
+          for name in ("LineDetect.c", "Cross.c", "Roundabout.c", "Err.c")],
         "-o", str(executable),
     ], check=True)
     subprocess.run([str(executable)], check=True)
