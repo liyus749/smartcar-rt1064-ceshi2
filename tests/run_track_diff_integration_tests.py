@@ -15,11 +15,11 @@ names = (
     "SERVO_D_DEFAULT", "SERVO_P_KEY_STEP", "SERVO_D_KEY_STEP", "SERVO_P_MIN", "SERVO_P_MAX",
     "SERVO_D_MIN", "SERVO_D_MAX", "RUN_KEY_DEBOUNCE_SCANS", "RUN_AUTO_START",
     "SPEED_KEY_STEP", "SPEED_KEY_MIN", "SPEED_KEY_MAX", "USE_RUN_KEYS", "USE_REMOTE_CONTROL",
-    "SPEED_DEFAULT", "USE_ISLAND", "ISLAND_SLOW_RATIO", "CROSS_SLOW_RATIO", "TURN_SLOW_MEDIUM", "TURN_SLOW_SHARP",
+    "SPEED_DEFAULT", "USE_ISLAND", "CROSS_SLOW_RATIO",
     "TURN_MEDIUM_LIMIT", "TURN_SHARP_LIMIT", "TURN_SPEED_MEDIUM_MAX",
     "TURN_SPEED_SHARP_MAX", "STEER_LIMIT_HOLD_TICKS", "STEER_DEADBAND",
     "STEER_BOOST_START", "STEER_BOOST_K", "SERVO_U_LIMIT", "SERVO_P_DEFAULT",
-    "TURN_PREVIEW_START", "TURN_PREVIEW_FULL", "TURN_ENTRY_SPEED_MAX",
+    "TURN_PREVIEW_START", "TURN_PREVIEW_FULL",
     "TURN_RELEASE_HOLD_TICKS", "TURN_RELEASE_STEP", "DIFF_STEER_DEADBAND",
     "ERROR_DIFF_ON", "ERROR_DIFF_OFF", "ERROR_DIFF_FULL", "ERROR_DIFF_MIN_LEVEL",
     "ERROR_DIFF_CONFIRM", "ERROR_DIFF_MAX_AGE",
@@ -112,12 +112,12 @@ int main(void) {
     /* The old 20-pixel gate missed this confirmed moderate error. */
     frames(16,15);
     assert(MotorPID_GetTargetRight()>MotorPID_GetTargetLeft()*1.30f);
-    assert(MotorPID_GetTargetLeft()>=70);
+    near(MotorPID_GetTargetLeft(),160);near(MotorPID_GetTargetRight(),227.2f);
     frames(24,15);
-    near(MotorPID_GetTargetLeft(),70);near(MotorPID_GetTargetRight(),112);
+    near(MotorPID_GetTargetLeft(),140);near(MotorPID_GetTargetRight(),224);
     near(MotorPID_GetDiffPercent(),60);
     frames(-24,15);
-    near(MotorPID_GetTargetLeft(),112);near(MotorPID_GetTargetRight(),70);
+    near(MotorPID_GetTargetLeft(),224);near(MotorPID_GetTargetRight(),140);
     /* Recenter / cross / missing frames revoke differential at the motor output. */
     frames(0,1);near(MotorPID_GetTargetLeft(),MotorPID_GetTargetRight());
     frames(24,15);Cross_Flag=1;frames(24,1);
@@ -130,21 +130,22 @@ int main(void) {
     run_speed=40;frames(24,20);near(MotorPID_GetTargetLeft(),70);
     near(MotorPID_GetTargetRight(),112);
     run_speed=0;frames(24,1);near(MotorPID_GetTarget(),0);
-    run_speed=80;frames(24,80);near(MotorPID_GetTargetLeft(),70);
-    near(MotorPID_GetTargetRight(),112);
+    run_speed=80;frames(24,80);near(MotorPID_GetTargetLeft(),80);
+    near(MotorPID_GetTargetRight(),128);
     run_switch=0;tick();near(MotorPID_GetTarget(),0);
     assert(!pwm_l && !pwm_r && servo_duty==790);
     near(dbg_diff_peak,60); /* command peak survives manual stop */
     run_switch=1;frames(0,1);near(dbg_diff_peak,0);
     /* Ring guidance cannot inherit a 60% yaw assist; actual inside curves may use it. */
+    run_speed=180;
     Island_State=ROUND_ENTER;frames(24,80);
-    near(MotorPID_GetTargetLeft(),70);near(MotorPID_GetTargetRight(),70);
+    near(MotorPID_GetTargetLeft(),100);near(MotorPID_GetTargetRight(),100);
     Island_State=ROUND_INSIDE;frames(24,80);
-    near(MotorPID_GetTargetLeft(),70);near(MotorPID_GetTargetRight(),112);
+    near(MotorPID_GetTargetLeft(),100);near(MotorPID_GetTargetRight(),160);
     Island_State=ROUND_EXIT;frames(24,1);
-    near(MotorPID_GetTargetLeft(),70);near(MotorPID_GetTargetRight(),70);
+    near(MotorPID_GetTargetLeft(),100);near(MotorPID_GetTargetRight(),100);
     Island_State=ROUND_APPROACH;frames(0,50);
-    near(MotorPID_GetTarget(),70); /* cap applies before steering becomes large */
+    near(MotorPID_GetTarget(),100); /* cap applies before steering becomes large */
     round_fault=1;tick();assert(run_switch==0 && !pwm_l && !pwm_r && servo_duty==790);
     round_pending=1;run_switch=1;tick();assert(!pwm_l && !pwm_r && dbg_duty==0);
     round_fault=round_pending=0;Island_State=0;frames(0,60);assert(MotorPID_IsEnabled());
@@ -156,7 +157,7 @@ int main(void) {
     frames(0,5);assert(!run_switch && !pwm_l && !pwm_r); // no auto restart
     run_switch=1;frames(0,60);assert(MotorPID_IsEnabled());
     Run_KeyStop(0);assert(!MotorPID_IsEnabled() && !pwm_l && !pwm_r && servo_duty==790);
-    puts("PASS: real image gate -> normal ISR -> real MotorPID, straight180, 70/112 left and right, earlier assist, invalid/cross/stale/recenter release and stop");
+    puts("PASS: real image gate -> normal ISR -> real MotorPID, straight180, small160, sharp140/224 left and right, ring100/160, earlier assist, invalid/cross/stale/recenter release and stop");
     return 0;
 }
 """

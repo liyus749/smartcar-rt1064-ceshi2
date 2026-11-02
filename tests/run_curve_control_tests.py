@@ -18,11 +18,11 @@ def block(name):
 
 
 names = (
-    "USE_ISLAND", "ISLAND_SLOW_RATIO", "CROSS_SLOW_RATIO", "TURN_SLOW_MEDIUM", "TURN_SLOW_SHARP",
+    "USE_ISLAND", "CROSS_SLOW_RATIO",
     "TURN_MEDIUM_LIMIT", "TURN_SHARP_LIMIT", "TURN_SPEED_MEDIUM_MAX",
     "TURN_SPEED_SHARP_MAX", "STEER_LIMIT_HOLD_TICKS", "STEER_DEADBAND",
     "STEER_BOOST_START", "STEER_BOOST_K", "SERVO_U_LIMIT", "SERVO_P_DEFAULT",
-    "SPEED_KEY_MAX", "TURN_PREVIEW_START", "TURN_PREVIEW_FULL", "TURN_ENTRY_SPEED_MAX",
+    "SPEED_KEY_MAX", "TURN_PREVIEW_START", "TURN_PREVIEW_FULL",
     "TURN_RELEASE_HOLD_TICKS", "TURN_RELEASE_STEP", "DIFF_STEER_DEADBAND",
     "ERROR_DIFF_ON", "ERROR_DIFF_OFF", "ERROR_DIFF_FULL", "ERROR_DIFF_MIN_LEVEL", "ERROR_DIFF_CONFIRM", "ERROR_DIFF_MAX_AGE",
 )
@@ -76,7 +76,7 @@ static void tick(int count) { while(count--) pit_handler0(); }
 static void near(float actual,float expected) { assert(fabsf(actual-expected)<0.001f); }
 int main(void) {
     assert(SERVO_SETUP_MODE==SERVO_SETUP_RUN && Island_State==ROUND_NORMAL);
-    assert(SPEED_KEY_MAX==240 && TURN_SPEED_MEDIUM_MAX==80 && TURN_SPEED_SHARP_MAX==70);
+    assert(SPEED_KEY_MAX==240 && TURN_SPEED_MEDIUM_MAX==160 && TURN_SPEED_SHARP_MAX==140);
     assert(Run_DifferentialTurn(0)==0 && Run_DifferentialTurn(10)==0 && Run_DifferentialTurn(-10)==0);
     near(Run_DifferentialTurn(80),1); near(Run_DifferentialTurn(-75),-1);
     near(Run_DifferentialTurn(1000),1); near(Run_DifferentialTurn(-1000),-1);
@@ -88,8 +88,8 @@ int main(void) {
             float next=Run_CurveTarget((float)speed,(float)angle,0);
             assert(next>=0 && next<=bounded && next<=previous+0.001f);
             near(next,Run_CurveTarget((float)speed,(float)-angle,0));
-            if(angle>30) assert(next<=80);
-            if(angle>70) assert(next<=70);
+            if(angle>30) assert(next<=160);
+            if(angle>60) assert(next<=140);
             previous=next;
         }
     }
@@ -103,30 +103,44 @@ int main(void) {
             float next=Run_CurveTarget((float)speed,0,warning);
             assert(next>=0 && next<=bounded && next<=previous+0.001f);
             near(next,Run_CurveTarget((float)speed,0,-warning));
-            if(warning>=TURN_PREVIEW_FULL) assert(next<=100);
-            if(speed<=100) near(next,bounded);
-            assert(Run_CurveTarget((float)speed,40,warning)<=80);
-            assert(Run_CurveTarget((float)speed,70,warning)<=70);
+            if(warning>=TURN_PREVIEW_FULL) assert(next<=140);
+            if(speed<=140) near(next,bounded);
+            assert(Run_CurveTarget((float)speed,40,warning)<=160);
+            assert(Run_CurveTarget((float)speed,70,warning)<=140);
             previous=next;
         }
     }
+    /* Exact requested tiers; lower manual settings are never raised by a curve. */
+    near(Run_CurveTarget(180,0,0),180);
+    near(Run_CurveTarget(180,40,0),160);
+    near(Run_CurveTarget(180,-40,0),160);
+    near(Run_CurveTarget(180,70,0),140);
+    near(Run_CurveTarget(180,0,.8f),160);
+    near(Run_CurveTarget(180,0,2),140);
+    near(Run_CurveTarget(100,75,4),100);
+    near(Run_CurveTarget(80,75,4),80);
+    near(Run_CurveTarget(0,75,4),0);
+    near(Run_CurveTarget(180,30,0),180);
+    near(Run_CurveTarget(180,30.1f,0),160);
+    near(Run_CurveTarget(180,60,0),160);
+    near(Run_CurveTarget(180,60.1f,0),140);
     /* Actual ISR: before-turn warning slows an 180 setting without extra steering. */
     run_switch=1; tick(1);
     near(target,80); assert(servo_duty==790 && motor_enabled && updates==1);
     run_speed=180; tick(50); near(target,180);
-    ErrPreview=2; tick(1); near(target,100); assert(servo_duty==790);
-    ErrPreview=-2; tick(1); near(target,100); assert(servo_duty==790);
+    ErrPreview=2; tick(1); near(target,140); assert(servo_duty==790);
+    ErrPreview=-2; tick(1); near(target,140); assert(servo_duty==790);
     ErrPreview=0;
-    tick(TURN_RELEASE_HOLD_TICKS); near(target,100);
-    tick(1); near(target,100+TURN_RELEASE_STEP);
+    tick(TURN_RELEASE_HOLD_TICKS); near(target,140);
+    tick(1); near(target,140+TURN_RELEASE_STEP);
     tick(50); near(target,180);
-    ErrUse=20; tick(1); near(target,80);
-    ErrUse=25; tick(1); near(target,70);
-    ErrUse=-25; tick(1); near(target,70); assert(diff_turn==0); /* no confirmed frames */
+    ErrUse=20; tick(1); near(target,160);
+    ErrUse=25; tick(1); near(target,140);
+    ErrUse=-25; tick(1); near(target,140); assert(diff_turn==0); /* no confirmed frames */
     /* Brief straight gaps in an S bend cannot immediately accelerate to 180. */
-    ErrUse=0; tick(5); near(target,70);
-    ErrUse=-25; tick(1); near(target,70);
-    ErrUse=0; tick(TURN_RELEASE_HOLD_TICKS); near(target,70);
+    ErrUse=0; tick(5); near(target,140);
+    ErrUse=-25; tick(1); near(target,140);
+    ErrUse=0; tick(TURN_RELEASE_HOLD_TICKS); near(target,140);
     float previous=target;
     for(int i=0;i<80;i++) {
         tick(1); assert(target>=previous && target-previous<=TURN_RELEASE_STEP+0.001f);
@@ -140,11 +154,17 @@ int main(void) {
     /* A fresh start uses the requested speed and the motor PID's existing soft start. */
     run_switch=0; tick(1); run_speed=180; Cross_Flag=0; ErrUse=0; run_switch=1;
     tick(1); near(target,180);
-    /* Crossing then sharp turn applies both limits; recovery stays gradual. */
+    /* Crossing retains its original cap without stacking another curve ratio. */
     Cross_Flag=1; tick(1); near(target,126); assert(diff_turn==0);
-    ErrUse=25; tick(1); near(target,70);
-    Cross_Flag=0; run_speed=80; tick(1); near(target,70);
+    ErrUse=25; tick(1); near(target,126);
+    Cross_Flag=0; run_speed=80; tick(1); near(target,80);
 
+    /* Ring speed wins over preview, steering and a residual cross flag. */
+    run_speed=180; Cross_Flag=1; ErrUse=25; ErrPreview=2;
+    for(int state=ROUND_APPROACH;state<=ROUND_RECOVER;state++) {
+        Island_State=state;tick(20);near(target,100);
+    }
+    Island_State=0;Cross_Flag=0;ErrPreview=0;
     /* Confirmed straight error enters the production deadband, clears residual D,
        and issues exact center even after a right turn with the configured D=2. */
     run_d=2; ErrUse=-30; tick(4); assert(servo_duty<790);

@@ -47,7 +47,7 @@
 #define SERVO_D_MAX         (50.0f)
 
 // 电机速度环保留原PID参数；SPD可按键调整
-#define SPEED_DEFAULT       (180.0f)    // 默认基础目标180；按键调速，弯道/十字仍自动降速
+#define SPEED_DEFAULT       (180.0f)    // 直道180，小弯160，大弯140，环岛100；按键仍可调低基础速度
 #define SPEED_KEY_STEP      (5.0f)     // SPD按键每次加减5
 #define SPEED_KEY_MIN       (70.0f)
 #define SPEED_KEY_MAX       (240.0f)
@@ -73,14 +73,11 @@
 #define USE_ASSISTANT       (0)        // 无线模块完全停用，不初始化/接收/发送
 #define USE_ISLAND          (1)        // 新版纯摄像头左右环岛；不调用旧陀螺仪环岛状态机
 #define USE_LEGACY_GYRO     (0)        // 当前纯图像环岛不需要IMU；不误初始化IMU660RA驱动
-#define ISLAND_SLOW_RATIO   (0.6f)     // 进环岛后目标速度降到 60%
 #define CROSS_SLOW_RATIO    (0.7f)     // 过十字时目标速度降到 70%
-#define TURN_SLOW_MEDIUM    (0.85f)    // 中等转角时目标速度降到 85%
-#define TURN_SLOW_SHARP     (0.70f)    // 大转角时目标速度降到 70%
 #define TURN_MEDIUM_LIMIT   (30.0f)    // 舵机输出超过此值开始弯道降速
 #define TURN_SHARP_LIMIT    (60.0f)    // 舵机输出超过此值按急弯降速
-#define TURN_SPEED_MEDIUM_MAX (80.0f)  // 扩大直道调速范围后，弯道速度不能只按比例放大
-#define TURN_SPEED_SHARP_MAX  (70.0f)
+#define TURN_SPEED_MEDIUM_MAX (160.0f) // 小弯基础目标上限；不再叠加比例减速
+#define TURN_SPEED_SHARP_MAX  (140.0f) // 大弯基础目标上限
 // 由连续摄像头帧的图像偏差决定是否辅助；不把照片位置或弯道前后半作为硬编码。
 #define ERROR_DIFF_ON         (12.0f)  // 两种偏差同向达到12像素，明显弯道及时确认
 #define ERROR_DIFF_OFF        (8.0f)   // 回到8像素以内退出，保留迟滞
@@ -92,7 +89,6 @@
 #define DIFF_STEER_DEADBAND   (10)     // 小打角不做差速，减少直道/S 弯附加摆动
 #define TURN_PREVIEW_START    (0.25f)  // 连续确认的前方弯道开始触发减速
 #define TURN_PREVIEW_FULL     (1.50f)  // 预警强度到此值时应用完整入弯速度上限
-#define TURN_ENTRY_SPEED_MAX  (100.0f)
 #define TURN_RELEASE_HOLD_TICKS (10)  // 20ms 一拍，出弯保持低目标 200ms
 #define TURN_RELEASE_STEP    (2.0f)   // 其后每拍最多增加 2，即每秒 100 计数/10ms
 #define STEER_LIMIT_HOLD_TICKS (10)    // 每拍 20ms，连续顶限位 200ms 才记录
@@ -436,25 +432,16 @@ static float Run_CurveTarget(float target, float u, float preview)
 {
     float magnitude = (u >= 0.0f) ? u : -u;
     float ahead = (preview >= 0.0f) ? preview : -preview;
-    float entry_cap = target;
-    if((ahead > TURN_PREVIEW_START) && (target > TURN_ENTRY_SPEED_MAX))
+    // Steering and preview select one speed tier, never multiply reductions.
+    // A lower key-selected speed or the 100-count ring cap remains lower.
+    if(magnitude > TURN_SHARP_LIMIT || ahead >= TURN_PREVIEW_FULL)
     {
-        float strength = (ahead - TURN_PREVIEW_START) /
-                         (TURN_PREVIEW_FULL - TURN_PREVIEW_START);
-        if(strength > 1.0f) { strength = 1.0f; }
-        entry_cap = target + strength * (TURN_ENTRY_SPEED_MAX - target);
-    }
-    if(magnitude > TURN_SHARP_LIMIT)
-    {
-        target *= TURN_SLOW_SHARP;
         if(target > TURN_SPEED_SHARP_MAX) { target = TURN_SPEED_SHARP_MAX; }
     }
-    else if(magnitude > TURN_MEDIUM_LIMIT)
+    else if(magnitude > TURN_MEDIUM_LIMIT || ahead > TURN_PREVIEW_START)
     {
-        target *= TURN_SLOW_MEDIUM;
         if(target > TURN_SPEED_MEDIUM_MAX) { target = TURN_SPEED_MEDIUM_MAX; }
     }
-    if(target > entry_cap) { target = entry_cap; }
     // 运行减速不低于70；零目标继续作为停车命令传递。
     if(target > 0.0f && target < MOTORPID_MIN_RUN_TARGET) { target = MOTORPID_MIN_RUN_TARGET; }
     return target;
@@ -946,14 +933,14 @@ void pit_handler0(void)
         MotorPID_SetEnable(1);
 
 #if USE_ISLAND
-        /* 进环岛自动降速 */
+        /* 环岛采用独立100上限；不与弯道或十字比例叠加。 */
         if(Island_State != 0)
         {
-            target *= ISLAND_SLOW_RATIO;
             if(target>ROUND_SPEED_MAX) { target=ROUND_SPEED_MAX; }
         }
+        else
 #endif
-        /* 过十字自动降速 */
+        /* 过十字保留原减速规则，环岛状态优先。 */
         if(Cross_Flag)
         {
             target *= CROSS_SLOW_RATIO;

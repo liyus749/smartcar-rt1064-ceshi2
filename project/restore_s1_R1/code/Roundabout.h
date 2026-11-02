@@ -24,7 +24,7 @@
 #define ROUND_PHASE_TIMEOUT_TICKS 750   // 15 seconds of motion without stage progress
 #define ROUND_TOTAL_TIMEOUT_TICKS 2000  // 40 seconds of motion, then stop
 #define ROUND_COOLDOWN_FRAMES      20
-#define ROUND_SPEED_MAX            70.0f
+#define ROUND_SPEED_MAX           100.0f
 
 typedef enum {
     ROUND_NORMAL=0, ROUND_APPROACH=1, ROUND_WAIT_ENTRY=2,

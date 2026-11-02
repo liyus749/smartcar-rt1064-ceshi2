@@ -27,7 +27,7 @@
 
 // 用户已停车手转轮确认 L/R 与物理左右轮一致，允许外轮辅助差速，正常循迹由连续图像大偏差控制介入。
 #define MOTORPID_DIFFERENTIAL_ENABLE (1)
-#define MOTORPID_DIFF_MAX_RATIO     (0.60f)  // 外轮/内轮最大1.60，正常大弯70/112
+#define MOTORPID_DIFF_MAX_RATIO     (0.60f)  // 外轮/内轮最大1.60；基础140时为140/224
 #define MOTORPID_DIFF_STEP          (0.06f)  // 每20ms差速比最多增加6个百分点，满幅约200ms
 #define MOTORPID_MIN_RUN_TARGET     (70.0f)  // 正常运行目标下限；停车为0，起步仍保留软启动
 #define MOTORPID_WHEEL_TARGET_MAX   (240.0f) // 单轮目标上限，不扩大现有调速范围
