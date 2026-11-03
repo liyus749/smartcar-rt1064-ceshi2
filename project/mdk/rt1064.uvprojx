@@ -486,6 +486,16 @@
               <FilePath>..\restore_s1_R1\code\Cross.h</FilePath>
             </File>
             <File>
+              <FileName>TrackControl.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\restore_s1_R1\code\TrackControl.c</FilePath>
+            </File>
+            <File>
+              <FileName>TrackControl.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\restore_s1_R1\code\TrackControl.h</FilePath>
+            </File>
+            <File>
               <FileName>Roundabout.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\restore_s1_R1\code\Roundabout.c</FilePath>

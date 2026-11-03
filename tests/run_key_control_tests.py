@@ -7,6 +7,8 @@ mdk=ROOT/'project/mdk'
 project=ET.parse(mdk/'rt1064.uvprojx')
 main_path=project.find(".//Files/File[FileName='main.c']/FilePath").text
 source=(mdk/main_path.replace('\\','/')).resolve().read_text(encoding='utf-8')
+control_dir=(mdk/main_path.replace('\\','/')).resolve().parents[2]/'code'
+source += '\n' + (control_dir/'TrackControl.h').read_text(encoding='utf-8')
 handlers=source.split('// BEGIN RUN KEY CONTROL\n',1)[1].split('// END RUN KEY CONTROL',1)[0]
 names=('SERVO_P_DEFAULT','SERVO_D_DEFAULT','SERVO_P_KEY_STEP','SERVO_D_KEY_STEP',
        'SERVO_P_MIN','SERVO_P_MAX','SERVO_D_MIN','SERVO_D_MAX',

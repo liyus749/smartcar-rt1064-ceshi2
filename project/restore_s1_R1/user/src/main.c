@@ -27,6 +27,7 @@
 #include "Roundabout.h"
 #include "Err.h"
 #include "TrackRemote.h"
+#include "TrackControl.h"
 
 
 //===================================================================================================================
@@ -36,22 +37,9 @@
 #define CAM_EXPOSURE        (512)      // 摄像头曝光：发白/反光调小(400/350)，远处太暗调大(600+)
 
 // 舵机PD：按键选择P/D再调整
-#define SERVO_P_DEFAULT     (1.80f)
-#define SERVO_P_KEY_STEP    (0.02f)     // C15/C14 调P时每次增减0.02
-#define SERVO_P_MIN         (0.0f)
-#define SERVO_P_MAX         (5.0f)
 #define RUN_KEY_DEBOUNCE_SCANS (3)     // 每 10ms 扫描，连续 3 次稳定才确认
-#define SERVO_D_DEFAULT     (2.0f)      // 20ms偏差差分，需实车调参
-#define SERVO_D_KEY_STEP    (0.02f)
-#define SERVO_D_MIN         (0.0f)
-#define SERVO_D_MAX         (50.0f)
 
 // 电机速度环保留原PID参数；SPD可按键调整
-#define SPEED_DEFAULT       (180.0f)    // 直道180，小弯160，大弯140，环岛100；按键仍可调低基础速度
-#define SPEED_KEY_STEP      (5.0f)     // SPD按键每次加减5
-#define SPEED_KEY_MIN       (70.0f)
-#define SPEED_KEY_MAX       (240.0f)
-#define SPEED_KEY_LONG_SCANS (100)     // 仅架空测试：每10ms扫描，长按约1秒
 #define SPEED_KP_DEFAULT    (MOTORPID_DEFAULT_KP)
 #define SPEED_KI_DEFAULT    (MOTORPID_DEFAULT_KI)
 #define SPEED_KD_DEFAULT    (MOTORPID_DEFAULT_KD)
@@ -73,35 +61,14 @@
 #define USE_ASSISTANT       (0)        // 无线模块完全停用，不初始化/接收/发送
 #define USE_ISLAND          (1)        // 新版纯摄像头左右环岛；不调用旧陀螺仪环岛状态机
 #define USE_LEGACY_GYRO     (0)        // 当前纯图像环岛不需要IMU；不误初始化IMU660RA驱动
-#define CROSS_SLOW_RATIO    (0.7f)     // 过十字时目标速度降到 70%
-#define TURN_MEDIUM_LIMIT   (30.0f)    // 舵机输出超过此值开始弯道降速
-#define TURN_SHARP_LIMIT    (60.0f)    // 舵机输出超过此值按急弯降速
-#define TURN_SPEED_MEDIUM_MAX (160.0f) // 小弯基础目标上限；不再叠加比例减速
-#define TURN_SPEED_SHARP_MAX  (140.0f) // 大弯基础目标上限
 // 由连续摄像头帧的图像偏差决定是否辅助；不把照片位置或弯道前后半作为硬编码。
-#define ERROR_DIFF_ON         (12.0f)  // 两种偏差同向达到12像素，明显弯道及时确认
-#define ERROR_DIFF_OFF        (8.0f)   // 回到8像素以内退出，保留迟滞
-#define ERROR_DIFF_FULL       (24.0f)  // 24像素达到最大60%差速
-#define ERROR_DIFF_MIN_LEVEL  (0.40f)  // 介入后至少请求满幅的40%，避免几乎看不出的微小差速
-#define ERROR_DIFF_CONFIRM    (2)      // 连续2个新摄像头帧，不能用定时器重复计旧帧
-#define ERROR_DIFF_MIN_ROWS   (20)
-#define ERROR_DIFF_MAX_AGE     (8)      // 20ms控制周期；约160ms无新图像则撤销
-#define DIFF_STEER_DEADBAND   (10)     // 小打角不做差速，减少直道/S 弯附加摆动
-#define TURN_PREVIEW_START    (0.25f)  // 连续确认的前方弯道开始触发减速
-#define TURN_PREVIEW_FULL     (1.50f)  // 预警强度到此值时应用完整入弯速度上限
-#define TURN_RELEASE_HOLD_TICKS (10)  // 20ms 一拍，出弯保持低目标 200ms
-#define TURN_RELEASE_STEP    (2.0f)   // 其后每拍最多增加 2，即每秒 100 计数/10ms
 #define STEER_LIMIT_HOLD_TICKS (10)    // 每拍 20ms，连续顶限位 200ms 才记录
 
 // 舵机 PD 输出限幅（偏差再大也不会一把打死）
-#define SERVO_U_LIMIT       (120.0f)
 
 // 转向死区：|偏差| 小于这个值时直接当 0，防止直道被 ±1 像素噪声推着左右摆
-#define STEER_DEADBAND      (1.5f)
 
 // 小偏差不额外补偿；明显偏离中近处赛道后，平滑增加大弯转向。
-#define STEER_BOOST_START   (12.0f)
-#define STEER_BOOST_K       (0.10f)
 
 
 //===================================================================================================================
@@ -424,28 +391,7 @@ static volatile float dbg_diff_peak;
 static uint8 limit_left_ticks;
 static uint8 limit_right_ticks;
 
-static float curve_release_target;
-static uint8 curve_release_ticks;
-static uint8 curve_speed_valid;
-
-static float Run_CurveTarget(float target, float u, float preview)
-{
-    float magnitude = (u >= 0.0f) ? u : -u;
-    float ahead = (preview >= 0.0f) ? preview : -preview;
-    // Steering and preview select one speed tier, never multiply reductions.
-    // A lower key-selected speed or the 100-count ring cap remains lower.
-    if(magnitude > TURN_SHARP_LIMIT || ahead >= TURN_PREVIEW_FULL)
-    {
-        if(target > TURN_SPEED_SHARP_MAX) { target = TURN_SPEED_SHARP_MAX; }
-    }
-    else if(magnitude > TURN_MEDIUM_LIMIT || ahead > TURN_PREVIEW_START)
-    {
-        if(target > TURN_SPEED_MEDIUM_MAX) { target = TURN_SPEED_MEDIUM_MAX; }
-    }
-    // 运行减速不低于70；零目标继续作为停车命令传递。
-    if(target > 0.0f && target < MOTORPID_MIN_RUN_TARGET) { target = MOTORPID_MIN_RUN_TARGET; }
-    return target;
-}
+// Speed policy and recovery state live in TrackControl.c.
 
 static float Run_DifferentialTurn(int angle)
 {
@@ -523,34 +469,6 @@ static float Run_ErrorDiffCommand(int servo_angle)
     // PD可能正在快速回正/换向，不能沿用相反方向的旧图像辅助。
     if(actual_turn*error_diff_request <= 0.0f) { return 0.0f; }
     return error_diff_request;
-}
-
-static void Run_SpeedReset(void)
-{
-    curve_release_target = 0.0f;
-    curve_release_ticks = 0;
-    curve_speed_valid = 0;
-}
-
-static float Run_SpeedTarget(float requested, float u, float preview)
-{
-    float desired = Run_CurveTarget(requested, u, preview);
-    if(!curve_speed_valid || (desired <= curve_release_target))
-    {
-        curve_speed_valid = 1;
-        curve_release_target = desired;
-        curve_release_ticks = (desired < requested) ? TURN_RELEASE_HOLD_TICKS : 0;
-    }
-    else if(curve_release_ticks > 0)
-    {
-        curve_release_ticks--;
-    }
-    else
-    {
-        curve_release_target += TURN_RELEASE_STEP;
-        if(curve_release_target > desired) { curve_release_target = desired; }
-    }
-    return curve_release_target;
 }
 
 static void Run_MonitorReset(void)
@@ -974,7 +892,7 @@ void pit_handler0(void)
             d = use_err - steer_prev_error;
             if(d > ERR_D_LIMIT) { d = ERR_D_LIMIT; }
             if(d < -ERR_D_LIMIT) { d = -ERR_D_LIMIT; }
-            steer_d_filter += 0.5f * (d - steer_d_filter);
+            steer_d_filter += STEER_D_FILTER_ALPHA * (d - steer_d_filter);
             d = steer_d_filter;
         }
         steer_prev_error = use_err;
@@ -988,7 +906,7 @@ void pit_handler0(void)
         if(u >  SERVO_U_LIMIT) { u =  SERVO_U_LIMIT; }
         if(u < -SERVO_U_LIMIT) { u = -SERVO_U_LIMIT; }
 
-        /* 比例降速同时受弯道绝对上限约束；设定速度低时不会被上限反向抬高。 */
+        /* 独立控制模块选择速度档位，并平滑恢复；较低手动设定优先。 */
         // 丢线时不采用失效的前方预警；弯中限速仍按保持的转向量执行。
         target = Run_SpeedTarget(target, u, Img_Disappear_Flag ? 0.0f : ErrPreview);
         Servo_Steer((int)u);

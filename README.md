@@ -1,3 +1,5 @@
+> **当前版本 RG3：新增舵机打角Ang显示，常用调参集中在`project/restore_s1_R1/code/TrackControl.h`。** 保留180/160/140/100速度及原P/D；模块分工、显示字段和反打排查见[RG3说明](docs/舵机显示与控制模块_RG3.md)，固件为[RG3固件](firmware/rt1064_keys_R3_RG3.axf)。
+
 > **当前修复版为 RG2：直道180、小弯160、大弯140、环岛100。** 保留RG1环岛识别修复；屏幕标题旁显示`RG2`。说明见[四档速度配置](docs/四档速度配置_RG2.md)，固件为[RG2固件](firmware/rt1064_keys_R3_RG2.axf)。
 
 # RT1064 智能车：KEY RUN R3
@@ -6,11 +8,11 @@
 
 ## 编译与烧录
 
-Keil工程 `project/mdk/rt1064.uvprojx`，目标 `nor_sdram_zf_dtcm`，ARMCLANG 6.24。活动源码为 `project/restore_s1_R1/code/` 和 `project/restore_s1_R1/user/`，目录名沿用旧版本。编译输出 `project/mdk/Objects/keys_R3/rt1064_keys_R3.axf`。可直接烧录 [RG2固件](firmware/rt1064_keys_R3_RG2.axf)，屏幕显示 `KEY RUN R3`。
+Keil工程 `project/mdk/rt1064.uvprojx`，目标 `nor_sdram_zf_dtcm`，ARMCLANG 6.24。活动源码为 `project/restore_s1_R1/code/` 和 `project/restore_s1_R1/user/`，目录名沿用旧版本。编译输出 `project/mdk/Objects/keys_R3/rt1064_keys_R3.axf`。可直接烧录 [RG3固件](firmware/rt1064_keys_R3_RG3.axf)，屏幕显示 `KEY RUN R3`。
 
 屏幕显示二值图、ERR、SPD、舵机P/D、左右编码器实际/目标、舵机PWM、十字Cr/Cs、环岛Is/Dir、CAM及停车原因。弯道降速、差速和十字/环岛控制保留。编码器为计数/10ms，不是RPM；基础SPD不同于弯道中每轮的实际目标。
 
-详细键位、标志位和操作见[逐飞主板按键说明](docs/逐飞主板_按键循迹R3.md)。构建与源文件校验见 `firmware/manifest_speed_RG2.json`。
+详细键位、标志位和操作见[逐飞主板按键说明](docs/逐飞主板_按键循迹R3.md)。构建与源文件校验见 `firmware/manifest_control_RG3.json`。
 
 ## 验证
 

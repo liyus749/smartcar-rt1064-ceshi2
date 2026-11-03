@@ -11,6 +11,7 @@ main_path = ET.parse(project_dir / "rt1064.uvprojx").find(".//Files/File[FileNam
 main_source = (project_dir / main_path.replace("\\", "/")).resolve()
 code_dir = main_source.parents[2] / "code"
 source = main_source.read_text(encoding="utf-8")
+source += "\n" + (code_dir/"TrackControl.h").read_text(encoding="utf-8")
 boost = source.split("// BEGIN STEERING BOOST\n", 1)[1].split("// END STEERING BOOST", 1)[0]
 config = "\n".join(re.search(r"^#define\s+" + key + r"\s+.*$", source, re.MULTILINE).group(0)
                    for key in ("SERVO_P_DEFAULT", "STEER_BOOST_START", "STEER_BOOST_K"))

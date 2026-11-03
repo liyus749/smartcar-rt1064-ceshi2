@@ -18,8 +18,9 @@ PREFIX = r"""
 #include <string.h>
 #include <math.h>
 typedef uint8_t uint8;
+#include "Servo.h"
 #define SCR_TXT_Y 104
-static int speed,left,ltarget,right,rtarget,pwm,cr,cs,is;
+static int speed,left,ltarget,right,rtarget,pwm,angle,cr,cs,is;
 static float error;
 static char state[8],spdsel[8],psel[8],dsel[8],dir[8],cam[16],reason[24];
 static void bounds(int x,int y,int chars) {
@@ -43,6 +44,7 @@ void ips200_show_int(int x,int y,int v,int digits) {
     else if(x==24&&y==200)right=v;
     else if(x==88&&y==200)rtarget=v;
     else if(x==160&&y==176)pwm=v;
+    else if(x==160&&y==200)angle=v;
     else if(x==24&&y==224)cr=v;
     else if(x==112&&y==224)cs=v;
     else if(x==24&&y==248)is=v;
@@ -59,20 +61,21 @@ int main(void) {
     assert(speed==180&&left==175&&ltarget==180&&right==172&&rtarget==180);
     assert(fabsf(error+16.5f)<.001f&&!strcmp(state,"RUN "));
     assert(!strcmp(spdsel,">SPD")&&!strcmp(psel," P")&&!strcmp(dsel," D"));
-    assert(cr==1&&cs==3&&is==0&&pwm==790&&!strcmp(dir,"--   "));
+    assert(cr==1&&cs==3&&is==0&&pwm==790&&angle==0&&!strcmp(dir,"--   "));
     Screen_ShowTrackFlags(0,0,4,1,0,0,870,1);
-    assert(!strcmp(psel,">P")&&!strcmp(spdsel," SPD")&&is==4&&!strcmp(dir,"LEFT "));
+    assert(!strcmp(psel,">P")&&!strcmp(spdsel," SPD")&&is==4&&angle==80&&!strcmp(dir,"LEFT "));
     Screen_ShowTrackFlags(0,0,8,-1,1,2,715,2);
     assert(!strcmp(dsel,">D")&&!strcmp(psel," P")&&!strcmp(dir,"RIGHT"));
+    assert(angle==-75);
     assert(is==8&&!strcmp(cam,"CAM:LOST")&&!strcmp(reason,"STOP:RING       "));
     Screen_ShowRunState(0,0);Screen_ShowHealth(1,1);
     assert(!strcmp(state,"STOP")&&!strcmp(reason,"STOP:CAMERA     "));
     Screen_ShowHealth(0,0);assert(!strcmp(cam,"CAM:OK  ")&&!strcmp(reason,"STOP:--         "));
-    puts("PASS: active LCD coordinates including footer within 240x320; actual/target values, selected SPD/P/D, cross/ring/direction, fault/LOST and PWM");
+    puts("PASS: active LCD coordinates including footer within 240x320; actual/target values, selected SPD/P/D, cross/ring/direction, fault/LOST and PWM/Ang left/center/right");
     return 0;
 }
 """
 with tempfile.TemporaryDirectory(prefix='rt1064_keys_display_') as folder:
-    f=Path(folder);c=f/'check.c';c.write_text(PREFIX+block+TEST,encoding='utf-8');exe=f/'check.exe'
-    subprocess.run(['gcc','-std=c99','-Wall','-Wextra','-Werror',str(c),'-o',str(exe)],check=True)
+    f=Path(folder);(f/'zf_common_headfile.h').write_text('#include <stdint.h>\ntypedef uint8_t uint8;typedef uint16_t uint16;typedef int16_t int16;\n');c=f/'check.c';c.write_text(PREFIX+block+TEST,encoding='utf-8');exe=f/'check.exe'
+    subprocess.run(['gcc','-std=c99','-Wall','-Wextra','-Werror','-I',str(f),'-I',str(screen.parent),str(c),'-o',str(exe)],check=True)
     subprocess.run([str(exe)],check=True)

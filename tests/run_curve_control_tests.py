@@ -11,6 +11,7 @@ main_path = ET.parse(project_dir / "rt1064.uvprojx").find(".//Files/File[FileNam
 main_source = (project_dir / main_path.replace("\\", "/")).resolve()
 code_dir = main_source.parents[2] / "code"
 source = main_source.read_text(encoding="utf-8")
+source += "\n" + (code_dir/"TrackControl.h").read_text(encoding="utf-8")
 
 
 def block(name):
@@ -21,7 +22,7 @@ names = (
     "USE_ISLAND", "CROSS_SLOW_RATIO",
     "TURN_MEDIUM_LIMIT", "TURN_SHARP_LIMIT", "TURN_SPEED_MEDIUM_MAX",
     "TURN_SPEED_SHARP_MAX", "STEER_LIMIT_HOLD_TICKS", "STEER_DEADBAND",
-    "STEER_BOOST_START", "STEER_BOOST_K", "SERVO_U_LIMIT", "SERVO_P_DEFAULT",
+    "STEER_BOOST_START", "STEER_BOOST_K", "STEER_D_FILTER_ALPHA", "SERVO_U_LIMIT", "SERVO_P_DEFAULT",
     "SPEED_KEY_MAX", "TURN_PREVIEW_START", "TURN_PREVIEW_FULL",
     "TURN_RELEASE_HOLD_TICKS", "TURN_RELEASE_STEP", "DIFF_STEER_DEADBAND",
     "ERROR_DIFF_ON", "ERROR_DIFF_OFF", "ERROR_DIFF_FULL", "ERROR_DIFF_MIN_LEVEL", "ERROR_DIFF_CONFIRM", "ERROR_DIFF_MAX_AGE",
@@ -41,6 +42,7 @@ typedef int16_t int16;
 #include "Servo.h"
 #include "MotorPID.h"
 #include "Roundabout.h"
+#include "TrackControl.h"
 #define ERR_D_LIMIT 20.0f
 #define B9 9
 #define MOTOR_DIAGNOSTIC_MODE 0 /* Check the normal controller, independent of selected bench firmware. */
@@ -222,12 +224,12 @@ int main(void) {
 """
 with tempfile.TemporaryDirectory(prefix="rt1064_curve_") as directory:
     build = Path(directory)
-    (build / "zf_common_headfile.h").write_text("/* No hardware needed. */\n", encoding="utf-8")
+    (build / "zf_common_headfile.h").write_text("#include <stdint.h>\ntypedef uint8_t uint8;typedef uint16_t uint16;typedef int16_t int16;\n", encoding="utf-8")
     (build / "check.c").write_text(config + PREFIX + block("STEERING BOOST") +
                                    block("RUN CURVE CONTROL") + controller + TEST,
                                    encoding="utf-8")
     executable = build / "check.exe"
     subprocess.run(["gcc", "-std=c99", "-O2", "-Wall", "-Wextra", "-Werror",
                     "-I", str(build), "-I", str(code_dir),
-                    str(build / "check.c"), "-o", str(executable)], check=True)
+                    str(build / "check.c"), str(code_dir / "TrackControl.c"), "-o", str(executable)], check=True)
     subprocess.run([str(executable)], check=True)
